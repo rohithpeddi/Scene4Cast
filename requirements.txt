@@ -1,0 +1,17 @@
+boxsdk
+numpy
+torch
+torchvision
+matplotlib
+tqdm
+open3d
+trimesh
+pyglet==1.5.31
+transformers
+pillow
+datasets
+huggingface_hub
+onnxruntime-gpu; platform_system != 'Darwin'
+onnxruntime; platform_system == 'Darwin'
+opencv-python
+shapely
