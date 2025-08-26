@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from xformers.components.attention import NystromAttention
+from .nystrom import NystromAttention
 
 from .attention import AttentionBlock
 
