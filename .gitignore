@@ -1,3 +1,6 @@
+datasets/preprocess/inpainting/VideoPainter/ckpt/*
+
+
 .DS_Store
 .idea/*
 
