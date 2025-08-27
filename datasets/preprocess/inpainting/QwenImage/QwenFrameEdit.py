@@ -26,7 +26,7 @@ class QwenFrameEdit:
         os.makedirs(self.output_directory, exist_ok=True)
 
         self.debug = True
-        # self.load_model()
+        self.load_model()
 
         # Load the video_id_frame_id_list.pkl file that contains the list of (video_id, frame_id) tuples.
         video_id_frame_id_list_pkl_file_path = os.path.join(self.data_directory, "4d_video_frame_id_list.pkl")
@@ -42,9 +42,12 @@ class QwenFrameEdit:
         self.pipeline.set_progress_bar_config(disable=None)
 
     def construct_video_prompt(self, video_id):
-        num_frames = os.listdir(os.path.join(self.data_directory, video_id, "frames"))
+        frame_ids = self.video_id_frame_id_list[video_id]
+        frame_id_list = sorted(list(np.unique(frame_ids)))
+
+        num_frames = len(frame_id_list)
         prompt = "Fill the masked region of the image with realistic and contextually appropriate content."
-        return [prompt] * len(num_frames)
+        return [prompt] * num_frames
 
     def get_sam2_masks(self, video_id):
         frame_ids = self.video_id_frame_id_list[video_id]
