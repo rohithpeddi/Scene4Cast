@@ -55,7 +55,7 @@ class SAM2Processor:
         for key, value in sam2_video_data.items():
             if key == "video_id":
                 assert sam2_video_data["video_id"] == video_id[
-                                                      :-4], "The video id should be the same as the one in the file name"
+                    :-4], "The video id should be the same as the one in the file name"
             else:
                 # key --> object_id
                 # value --> {}
