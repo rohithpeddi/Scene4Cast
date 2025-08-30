@@ -57,35 +57,43 @@ class RoseEditProcessor:
         sam_mask_keys.sort()
         print(f"[{video_id}] Loaded {len(sam_mask_keys)} SAM2 masks: {sam_mask_keys[:5]} ... {sam_mask_keys[-5:]}")
 
-        sam2_masked_frames = []
+        sam2_masks = []
         for frame_id in frame_id_list:
             sam_mask = sam_masks_dict[frame_id]
-            # Load the original frame
-            original_frame_path = os.path.join(self.data_directory, "frames", video_id, f"{frame_id:06d}.png")
-            original_frame = Image.open(original_frame_path).convert("RGB")
-            original_frame_tensor = torch.from_numpy(np.array(original_frame)).float() / 255.0
 
-            # Ensure the mask is binary
-            binary_mask = (sam_mask > 0.5).float()
+            # Convert the mask tensor to a PIL image
+            sam_mask = Image.fromarray((sam_mask.numpy() * 255).astype(np.uint8))
+            sam2_masks.append(sam_mask)
 
-            # Create the masked image by setting the masked region to white (1.0)
-            masked_frame_tensor = original_frame_tensor * (1 - binary_mask) + binary_mask * 1.0
-            masked_frame = Image.fromarray((masked_frame_tensor.numpy() * 255).astype(np.uint8))
-            sam2_masked_frames.append(masked_frame)
-
-            if self.debug:
-                # Show (a) Binary SAM2 mask (b) Original frame (c) Masked frame
-                fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-                axs[0].imshow(sam_mask)
-                axs[0].set_title(f"SAM2 Mask Frame {frame_id}")
-                axs[1].imshow(original_frame)
-                axs[1].set_title(f"Original Frame {frame_id}")
-                axs[2].imshow(masked_frame)
-                axs[2].set_title(f"SAM2 Masked Frame {frame_id}")
-                for ax in axs:
-                    ax.axis('off')
-                plt.show()
-        return sam2_masked_frames
+        # sam2_masked_frames = []
+        # for frame_id in frame_id_list:
+        #     sam_mask = sam_masks_dict[frame_id]
+        #     # Load the original frame
+        #     original_frame_path = os.path.join(self.data_directory, "frames", video_id, f"{frame_id:06d}.png")
+        #     original_frame = Image.open(original_frame_path).convert("RGB")
+        #     original_frame_tensor = torch.from_numpy(np.array(original_frame)).float() / 255.0
+        #
+        #     # Ensure the mask is binary
+        #     binary_mask = (sam_mask > 0.5).float()
+        #
+        #     # Create the masked image by setting the masked region to white (1.0)
+        #     masked_frame_tensor = original_frame_tensor * (1 - binary_mask) + binary_mask * 1.0
+        #     masked_frame = Image.fromarray((masked_frame_tensor.numpy() * 255).astype(np.uint8))
+        #     sam2_masked_frames.append(masked_frame)
+        #
+        #     if self.debug:
+        #         # Show (a) Binary SAM2 mask (b) Original frame (c) Masked frame
+        #         fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+        #         axs[0].imshow(sam_mask)
+        #         axs[0].set_title(f"SAM2 Mask Frame {frame_id}")
+        #         axs[1].imshow(original_frame)
+        #         axs[1].set_title(f"Original Frame {frame_id}")
+        #         axs[2].imshow(masked_frame)
+        #         axs[2].set_title(f"SAM2 Masked Frame {frame_id}")
+        #         for ax in axs:
+        #             ax.axis('off')
+        #         plt.show()
+        return sam2_masks
 
     def get_sampled_frames(self, video_id):
         frame_ids = self.video_id_frame_id_list[video_id]
@@ -123,17 +131,32 @@ class RoseEditProcessor:
         video_writer.release()
         print(f"[{video_id}] Saved sampled video to {sampled_video_path}")
 
+    def resize_frames(self, frames, target_size=(480, 720)):
+        resized_frames = []
+        for frame in frames:
+            resized_frame = frame.resize(target_size, Image.LANCZOS)
+            resized_frames.append(resized_frame)
+        return resized_frames
+
     def process(self, video_id):
         print(f"Processing video_id: {video_id}")
 
         # Get SAM2 masks
         sam2_mask_frames = self.get_sam2_masks(video_id)
-        # Store the SAM2 masks as a video
+
+        # Resize SAM2 masks to 480x720
+        resized_sam2_mask_frames = self.resize_frames(sam2_mask_frames, target_size=(480, 720))
+        sam2_mask_frames = resized_sam2_mask_frames
+
         self.store_mask_videos(video_id, sam2_mask_frames)
 
         # Get sampled original frames
         sampled_frames = self.get_sampled_frames(video_id)
-        # Store the sampled original frames as a video
+
+        # Resize sampled frames to 480x720
+        resized_sampled_frames = self.resize_frames(sampled_frames, target_size=(480, 720))
+        sampled_frames = resized_sampled_frames
+
         self.store_sampled_videos(video_id, sampled_frames)
 
 
