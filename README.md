@@ -32,7 +32,7 @@
 
 ## 📢 News & Updates
 
-- **[June 2026]** — ActionGenome4D annotations, trained checkpoints, and VLM evaluation code release *(upcoming)*
+- **[May 2026]** — ActionGenome4D annotations, trained checkpoints, and VLM evaluation code available upon request by email to [rohith.peddi@utdallas.edu](mailto:rohith.peddi@utdallas.edu)
 - **[Mar 2026]** — Released the [arXiv paper](https://arxiv.org/abs/2603.13185) describing the WorldSGG framework.
 
 ---
@@ -52,6 +52,12 @@
 ![WSGG Task Details](analysis/assets/WorldSGGTaskPicture.png)
 
 The **World Scene Graph Generation (WSGG)** task involves predicting 3D bounding boxes and relationship properties (such as attention, spatial proximity, and contact) for objects within a continuous 4D scene setup.
+
+<p align="center">
+  <strong>WSGG Task Walkthrough</strong><br>
+  <img src="analysis/assets/task_videos/TASKVideo.gif" width="800" alt="WSGG Task Video"><br>
+  <sub>An animated walkthrough of the WSGG task formulation</sub>
+</p>
 
 ---
 
@@ -125,14 +131,14 @@ The **Manual 3D Floor Correction** tool provides a 3D annotation interface for a
 ---
 
 ### 6. WSGG Model Pipeline
-![WSGG Model Pipeline Architecture](analysis/assets/WorldSGGWSGG.png)
+![WSGG Model Pipeline Architecture](analysis/assets/WorldWise.png)
 
 The **WorldSGG** architecture includes specialized encoders (structural, motion, camera pose), unobserved object representations (such as PWG, MWAE, and 4DST variants), and spatio-temporal decoders to predict complex object relationships in 4D.
 
 ---
 
 ### 7. MLLM Evaluation Pipeline
-![MLLM Evaluation Pipeline](analysis/assets/WorldSGGMLLMPipeline.png)
+![MLLM Evaluation Pipeline](analysis/assets/UWorldSGGGraphRAG.png)
 
 The **MLLM Pipeline** utilizes Vision-Language Models to generate coarse event graphs and employs Large Language Models powered by Graph RAG to infer continuous world scene graphs from video segments.
 
