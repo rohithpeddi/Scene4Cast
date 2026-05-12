@@ -49,50 +49,64 @@
 ## 🔍 Overview
 
 ### 1. World Scene Graph Generation (WSGG) Task
-![WSGG Task Details](analysis/assets/WorldSGGTaskPicture.png)
-
-The **World Scene Graph Generation (WSGG)** task involves predicting 3D bounding boxes and relationship properties (such as attention, spatial proximity, and contact) for objects within a continuous 4D scene setup.
 
 <p align="center">
-  <strong>WSGG Task Walkthrough</strong><br>
-  <img src="analysis/assets/task_videos/TASKVideo.gif" width="800" alt="WSGG Task Video"><br>
-  <sub>An animated walkthrough of the WSGG task formulation</sub>
+  <img src="analysis/assets/WorldSGGTaskPicture.png" width="100%" alt="WSGG Task: Frame-based Video SGG vs. proposed World Scene Graph Generation">
 </p>
 
----
+Comparison of the conventional **frame-based Video Scene Graph Generation** (left) which produces per-frame 2D scene graphs with the proposed **World Scene Graph Generation** task (right) which jointly reasons about 3D oriented bounding boxes and spatio-temporal relationships in a persistent world frame.
 
-### 2. 4D Scene Pipeline
-![4D Scene Pipeline](analysis/assets/4DScenePipeline.png)
-
-The **4D Scene Pipeline** processes monocular video to construct a comprehensive 4D representation of the environment, integrating motion features, camera pose, 3D object detection, tracking, and metric space projection of objects in the scene.
-
-Picture generated using ChatGPT
 
 ---
 
-### 3. ActionGenome4D Dataset
+### 2. ActionGenome4D Dataset
 
-An overview of the **ActionGenome4D** dataset, which provides rich 4D annotations for objects and their dynamic interactions over time across a variety of indoor environments.
+<p align="center">
+  <img src="analysis/assets/task_videos/TASKVideo.gif" width="800" alt="WSGG Task Walkthrough"><br>
+  <sub>Animated walkthrough of the WSGG task formulation</sub>
+</p>
+
+
+<p align="center">
+  <img src="analysis/assets/WorldSGGDatasetPicture.png" width="100%" alt="ActionGenome4D Dataset Construction Pipeline">
+</p>
+
+The **ActionGenome4D** dataset construction pipeline, showing the geometric annotation stages
+(i) scene construction via π³ with bundle adjustment, 
+(ii) floor determination via PromptHMR, 
+(iii) 3D OBB construction via multi-scale erosion 
+ alongside the semantic annotation stages
+(iv) MLLM inference for relationship prediction and 
+(v) custom relationship correction tool 
+ with a custom 4D annotation correction tool (vi) for manual quality assurance.
 
 <p align="center">
   <strong>Human Mesh Determination</strong><br>
   <img src="analysis/assets/ag4D_samples/HumanMesh_Determination_0DJ6R_It2.gif" width="800" alt="Human Mesh Determination"><br>
-  <sub>Human mesh estimation and determination for scene <code>0DJ6R</code></sub>
+  <sub>Human mesh estimation and floor alignment for scene <code>0DJ6R</code></sub>
 </p>
 
 <p align="center">
   <strong>4D Object Reconstruction</strong><br>
   <img src="analysis/assets/ag4D_samples/StaticScene_0DJ6R_Pi3_Refined_Rectangular_Masks_Removed_blacks.gif" width="800" alt="Static Scene Reconstruction"><br>
-  <sub>4D object reconstruction for scene <code>0DJ6R</code></sub>
+  <sub>4D static scene reconstruction with refined object masks for scene <code>0DJ6R</code></sub>
 </p>
 
-![Dataset Picture](analysis/assets/WorldSGGDatasetPicture.png)
+---
+
+### 3. 4D Scene Reconstruction Pipeline
+
+<p align="center">
+  <img src="analysis/assets/4DScenePipeline.png" width="100%" alt="4D Scene Reconstruction Pipeline">
+</p>
+
+The **4D scene reconstruction pipeline** processes raw Action Genome videos through four stages: (i) adaptive frame sampling via SIFT + RANSAC homography, (ii) feed-forward 3D inference using π³ for both static and dynamic point clouds, (iii) static-dynamic scene decomposition, and (iv) per-frame geometric alignment via Trimmed ICP with Weighted Kabsch fitting — producing a unified 4D scene representation with refined camera poses and mask-aware merging.
 
 ---
 
 ### 4. Manual Relationship Correction
 
-The **Manual Relationship Correction** interface allows for human-in-the-loop review and fine-grained modification of generated relationships, ensuring high-quality ground-truth annotations.
+The **manual relationship correction** interface allows for human-in-the-loop review and fine-grained modification of generated relationships, ensuring high-quality ground-truth annotations.
 
 <p align="center">
   <strong>Scene Graph Corrector — Part 1</strong><br>
@@ -106,13 +120,11 @@ The **Manual Relationship Correction** interface allows for human-in-the-loop re
   <sub>Continued world frame relationship annotation</sub>
 </p>
 
-![Manual Relationship Correction Interface](analysis/assets/WorldSGGManualRelCorrection.png)
-
 ---
 
-### 5. Manual 3D Floor Correction
+### 5. Manual 3D Annotation Correction
 
-The **Manual 3D Floor Correction** tool provides a 3D annotation interface for aligning reconstructed point clouds with the ground plane. Through a multi-step process of rotation and translation adjustments, annotators correct the floor alignment to ensure accurate world-frame coordinate systems for all objects in the scene.
+The **manual 3D annotation correction** tool provides a 3D annotation interface for aligning reconstructed point clouds with the ground plane. Through a multi-step process of rotation and translation adjustments, annotators correct the floor alignment to ensure accurate world-frame coordinate systems for all objects in the scene.
 
 <p align="center">
   <strong>Monocular 3D Annotations Corrections</strong><br>
@@ -121,26 +133,30 @@ The **Manual 3D Floor Correction** tool provides a 3D annotation interface for a
 </p>
 
 <p align="center">
-  <strong>3D annotations Corrections</strong><br>
+  <strong>World Annotations Corrections</strong><br>
   <img src="analysis/assets/world_geom_tool/WorldAnnotationsCorrections_3.gif" width="800" alt="World Annotations Corrections"><br>
-  <sub>Correcting 3D annotations</sub>
+  <sub>Correcting 3D oriented bounding box annotations in the world frame</sub>
 </p>
 
-![Manual 3D Floor Correction Interface](analysis/assets/WorldSGGManual3DFloorCorrection.png)
+---
+
+### 6. WorldWise: WSGG Model Architecture
+
+<p align="center">
+  <img src="analysis/assets/WorldWise.png" width="100%" alt="WorldWise Architecture">
+</p>
+
+The **WorldWise** architecture operates in two stages: **Stage 1** performs monocular 3D detection using DINOv3 features with a factorized 3D head to produce 2D bounding boxes, 3D OBB parameters, and class logits. **Stage 2** generates the world scene graph through four specialized encoders — object spatial encoder, object motion encoder, global structural encoder, and camera temporal encoder — followed by a masked autoencoder for unobserved object representation, and spatio-temporal decoders for relationship classification.
 
 ---
 
-### 6. WSGG Model Pipeline
-![WSGG Model Pipeline Architecture](analysis/assets/WorldWise.png)
+### 7. WorldRAG: MLLM Evaluation Pipeline
 
-The **WorldSGG** architecture includes specialized encoders (structural, motion, camera pose), unobserved object representations (such as PWG, MWAE, and 4DST variants), and spatio-temporal decoders to predict complex object relationships in 4D.
+<p align="center">
+  <img src="analysis/assets/UWorldSGGGraphRAG.png" width="100%" alt="WorldRAG MLLM Evaluation Pipeline">
+</p>
 
----
-
-### 7. MLLM Evaluation Pipeline
-![MLLM Evaluation Pipeline](analysis/assets/UWorldSGGGraphRAG.png)
-
-The **MLLM Pipeline** utilizes Vision-Language Models to generate coarse event graphs and employs Large Language Models powered by Graph RAG to infer continuous world scene graphs from video segments.
+The **WorldRAG** pipeline leverages Vision Language Models for unlocalized world scene graph generation. It consists of three modules: (a) a **Coarse Event Graph Construction** module that segments video into key frame segments and builds an event graph with entity, action, and scene nodes, (b) an **Object Discovery** module that identifies objects in the world using VLM-based embedding similarity matching, and (c) a **Graph RAG** module that retrieves and re-ranks relevant event graph nodes for relationship prediction via a Large Language Model.
 
 ---
 
