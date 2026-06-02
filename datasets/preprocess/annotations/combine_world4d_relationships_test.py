@@ -638,6 +638,10 @@ def parse_args():
         "--ag_root_directory", type=str, default="/data/rohith/ag",
     )
     parser.add_argument(
+        "--phase", type=str, required=True, choices=["train", "test"],
+        help="Dataset phase (required). Reads 4D bboxes from world_annotations/<phase>/...",
+    )
+    parser.add_argument(
         "--overwrite", action="store_true", default=False,
         help="Overwrite existing output files",
     )
@@ -656,8 +660,8 @@ def main():
 
     # Test augmented PKLs from augment_relationships_test.py
     rel_dir = ag_root / "wsg_2d_augmentations"
-    w4d_dir = ag_root / "world_annotations" / "bbox_annotations_4d"
-    output_dir = ag_root / "world4d_rel_annotations" / "test"
+    w4d_dir = ag_root / "world_annotations" / args.phase / "bbox_annotations_4d_corrected"
+    output_dir = ag_root / "world4d_rel_annotations" / args.phase
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Augmented rel dir:  {rel_dir}")

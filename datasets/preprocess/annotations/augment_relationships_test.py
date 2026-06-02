@@ -420,6 +420,7 @@ def augment_all(
     corrections_dir: str,
     output_dir: str,
     video_id: Optional[str] = None,
+    overwrite: bool = False,
 ) -> Dict[str, bool]:
     """Augment all (or one) video(s) and save results.
 
@@ -598,6 +599,10 @@ def augment_all(
                 n_with_corrections += 1
 
             save_path = os.path.join(output_dir, f"{vid}.pkl")
+            if os.path.exists(save_path) and not overwrite:
+                log.debug("SKIPPED | video=%s | path=%s (already exists, use --overwrite)", vid, save_path)
+                results[vid] = True
+                continue
             with open(save_path, "wb") as f:
                 pickle.dump(record, f)
 
@@ -654,6 +659,10 @@ def main():
         "--video", type=str, default=None,
         help="Augment a single video (e.g. '00607.mp4'). Omit to augment all.",
     )
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help="Overwrite existing output PKL files (default: skip if exists)",
+    )
     args = parser.parse_args()
 
     augment_all(
@@ -661,6 +670,7 @@ def main():
         corrections_dir=args.corrections_dir,
         output_dir=args.output_dir,
         video_id=args.video,
+        overwrite=args.overwrite,
     )
 
 

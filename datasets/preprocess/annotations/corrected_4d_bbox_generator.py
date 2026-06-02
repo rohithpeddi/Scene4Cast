@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from annotation_utils import (
     get_video_belongs_to_split,
+    get_video_phase,
     _faces_u32,
     _load_pkl_if_exists,
 )
@@ -93,17 +94,19 @@ class Corrected4DBBoxGenerator(FrameToWorldBase):
     active-object classification used by the filling/union logic.
     """
 
-    def __init__(self, ag_root_directory: str, dynamic_scene_dir_path: str):
+    def __init__(self, ag_root_directory: str, dynamic_scene_dir_path: str, phase: str = "test"):
         super().__init__(ag_root_directory, dynamic_scene_dir_path)
 
-        # Corrected 3D bbox source
+        self.phase = phase
+
+        # Corrected 3D bbox source (phase-separated)
         self.bbox_3d_obb_corrected_root_dir = (
-            self.world_annotations_root_dir / "bbox_annotations_3d_obb_corrected"
+            self.world_annotations_root_dir / phase / "bbox_annotations_3d_obb_corrected"
         )
 
-        # Output directory for corrected 4D bboxes
+        # Output directory for corrected 4D bboxes (phase-separated)
         self.bbox_4d_corrected_root_dir = (
-            self.world_annotations_root_dir / "bbox_annotations_4d_corrected"
+            self.world_annotations_root_dir / phase / "bbox_annotations_4d_corrected"
         )
         os.makedirs(self.bbox_4d_corrected_root_dir, exist_ok=True)
 
@@ -638,6 +641,10 @@ def parse_args():
         "--dynamic_scene_dir_path", type=str,
         default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
     )
+    parser.add_argument(
+        "--phase", type=str, required=True, choices=["train", "test"],
+        help="Dataset phase (required). Inputs/outputs go to world_annotations/<phase>/...",
+    )
     parser.add_argument("--split", type=str, default=None)
     parser.add_argument(
         "--video", type=str, default=None, help="Process a single video",
@@ -660,6 +667,7 @@ def main():
     generator = Corrected4DBBoxGenerator(
         ag_root_directory=args.ag_root_directory,
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        phase=args.phase,
     )
 
     if args.visualize:
@@ -692,6 +700,7 @@ def main_sample():
     generator = Corrected4DBBoxGenerator(
         ag_root_directory=args.ag_root_directory,
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        phase=args.phase,
     )
 
     # Generate (skips if already exists unless --overwrite)

@@ -34,6 +34,7 @@ sys.path.insert(0, os.path.dirname(__file__) + "/..")
 
 from annotation_utils import (
     get_video_belongs_to_split,
+    get_video_phase,
     _faces_u32,
     _load_pkl_if_exists,
     _npz_open,
@@ -56,20 +57,22 @@ class CorrectedFrameBBoxGenerator(FrameToWorldAnnotationsBase):
     (point loading, camera transform, path conventions).
     """
 
-    def __init__(self, ag_root_directory: str, dynamic_scene_dir_path: str):
+    def __init__(self, ag_root_directory: str, dynamic_scene_dir_path: str, phase: str = "test"):
         super().__init__(ag_root_directory, dynamic_scene_dir_path)
 
-        # Corrected bbox source directory
+        self.phase = phase
+
+        # Corrected bbox source directory (phase-separated)
         self.bbox_3d_obb_corrected_root_dir = (
-            self.world_annotations_root_dir / "bbox_annotations_3d_obb_corrected"
+            self.world_annotations_root_dir / phase / "bbox_annotations_3d_obb_corrected"
         )
 
-        # Output directories for corrected frame-level bboxes
+        # Output directories for corrected frame-level bboxes (phase-separated)
         self.bbox_3d_obb_corrected_final_root_dir = (
-            self.world_annotations_root_dir / "bbox_annotations_3d_obb_corrected_final"
+            self.world_annotations_root_dir / phase / "bbox_annotations_3d_obb_corrected_final"
         )
         self.bbox_3d_obb_corrected_camera_root_dir = (
-            self.world_annotations_root_dir / "bbox_annotations_3d_obb_corrected_camera"
+            self.world_annotations_root_dir / phase / "bbox_annotations_3d_obb_corrected_camera"
         )
 
         os.makedirs(self.bbox_3d_obb_corrected_final_root_dir, exist_ok=True)
@@ -695,6 +698,10 @@ def parse_args():
         "--dynamic_scene_dir_path", type=str,
         default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
     )
+    parser.add_argument(
+        "--phase", type=str, required=True, choices=["train", "test"],
+        help="Dataset phase (required). Inputs/outputs go to world_annotations/<phase>/...",
+    )
     parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--video", type=str, default=None, help="Process single video")
     parser.add_argument("--overwrite", action="store_true")
@@ -720,6 +727,7 @@ def main():
     generator = CorrectedFrameBBoxGenerator(
         ag_root_directory=args.ag_root_directory,
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        phase=args.phase,
     )
 
     if args.visualize:
@@ -757,6 +765,7 @@ def main_sample():
     generator = CorrectedFrameBBoxGenerator(
         ag_root_directory=args.ag_root_directory,
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        phase=args.phase,
     )
 
     # Generate both final and camera (skips if already exists unless --overwrite)

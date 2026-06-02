@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.dirname(__file__) + "/..")
 
 from annotation_utils import (
     get_video_belongs_to_split,
+    get_video_phase,
     _faces_u32,
     _xywh_to_xyxy,
     _resize_bbox_to,
@@ -333,11 +334,14 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
         dynamic_scene_dir_path: Optional[str] = None,
         ag_root_directory: Optional[str] = None,
         manual_corrections_dir: Optional[str] = None,
+        phase: str = "test",
     ) -> None:
         super().__init__(
             dynamic_scene_dir_path=dynamic_scene_dir_path,
             ag_root_directory=ag_root_directory,
         )
+
+        self.phase = phase
 
         # Manual corrections PKL directory
         if manual_corrections_dir:
@@ -345,9 +349,9 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
         else:
             self.manual_corrections_dir = Path("/data/rohith/ag/world_annotations/manual_corrections")
 
-        # Output directories for corrected annotations
+        # Output directories for corrected annotations (phase-separated)
         self.bbox_3d_obb_corrected_root_dir = (
-            self.world_annotations_root_dir / "bbox_annotations_3d_obb_corrected"
+            self.world_annotations_root_dir / phase / "bbox_annotations_3d_obb_corrected"
         )
         os.makedirs(self.bbox_3d_obb_corrected_root_dir, exist_ok=True)
 
@@ -938,6 +942,7 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
         Process only videos that have manual corrections.
         Does not require a dataloader — discovers videos from the
         manual_corrections directory.
+        Filters videos by self.phase.
         """
         results = {}
         if not self.manual_corrections_dir.exists():
@@ -947,9 +952,21 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
         correction_files = sorted(self.manual_corrections_dir.glob("*.pkl"))
         print(f"[corrected-bbox] found {len(correction_files)} correction files")
 
-        for pkl_path in tqdm(correction_files, desc="Corrected BBox"):
+        # Filter by phase
+        filtered_files = []
+        for pkl_path in correction_files:
             video_key = pkl_path.stem
             video_id = video_key.replace("_", ".") + ".mp4"
+            vid_phase = get_video_phase(video_id, str(self.ag_root_directory))
+            if vid_phase is None:
+                print(f"  [Warning] Cannot determine phase for {video_id}, skipping")
+                continue
+            if vid_phase != self.phase:
+                continue
+            filtered_files.append((pkl_path, video_id))
+        print(f"[corrected-bbox] {len(filtered_files)} videos match phase='{self.phase}'")
+
+        for pkl_path, video_id in tqdm(filtered_files, desc=f"Corrected BBox ({self.phase})"):
             vid_gt, full_gt = self.get_video_gt_annotations(video_id)
             success = self.generate_corrected_video_bb_annotations(
                 video_id=video_id,
@@ -1231,6 +1248,10 @@ def parse_args():
         "--manual_corrections_dir", type=str,
         default="/data/rohith/ag/world_annotations/manual_corrections",
     )
+    parser.add_argument(
+        "--phase", type=str, required=True, choices=["train", "test"],
+        help="Dataset phase (required). Outputs go to world_annotations/<phase>/...",
+    )
     parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--video", type=str, default=None, help="Process single video")
     parser.add_argument("--overwrite", action="store_true")
@@ -1256,6 +1277,7 @@ def main():
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
         ag_root_directory=args.ag_root_directory,
         manual_corrections_dir=args.manual_corrections_dir,
+        phase=args.phase,
     )
     generator.gdino_score_threshold = args.gdino_score_threshold
 
@@ -1293,6 +1315,7 @@ def main_sample():
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
         ag_root_directory=args.ag_root_directory,
         manual_corrections_dir=args.manual_corrections_dir,
+        phase=args.phase,
     )
     generator.gdino_score_threshold = args.gdino_score_threshold
 

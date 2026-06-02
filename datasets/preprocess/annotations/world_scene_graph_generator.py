@@ -308,11 +308,13 @@ class WorldSceneGraphGenerator:
     def __init__(
         self,
         ag_root_directory: str,
+        phase: str = "test",
         augmented_rel_dir: Optional[str] = None,
         bbox_4d_corrected_dir: Optional[str] = None,
         output_dir: Optional[str] = None,
     ):
         self.ag_root = Path(ag_root_directory)
+        self.phase = phase
         self.world_annotations_dir = self.ag_root / "world_annotations"
 
         # Input directories
@@ -327,14 +329,14 @@ class WorldSceneGraphGenerator:
             self.bbox_4d_corrected_dir = Path(bbox_4d_corrected_dir)
         else:
             self.bbox_4d_corrected_dir = (
-                self.world_annotations_dir / "bbox_annotations_4d_corrected"
+                self.world_annotations_dir / phase / "bbox_annotations_4d_corrected"
             )
 
-        # Output directory
+        # Output directory (phase-separated)
         if output_dir:
             self.output_dir = Path(output_dir)
         else:
-            self.output_dir = self.world_annotations_dir / "world_scene_graph"
+            self.output_dir = self.world_annotations_dir / phase / "world_scene_graph"
         os.makedirs(self.output_dir, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -453,16 +455,20 @@ def parse_args():
         "--ag_root_directory", type=str, default="/data/rohith/ag",
     )
     parser.add_argument(
+        "--phase", type=str, required=True, choices=["train", "test"],
+        help="Dataset phase (required). Inputs/outputs go to world_annotations/<phase>/...",
+    )
+    parser.add_argument(
         "--augmented_rel_dir", type=str, default=None,
         help="Dir with augmented relationship PKLs (default: <ag_root>/world_annotations/augmented_relationships)",
     )
     parser.add_argument(
         "--bbox_4d_corrected_dir", type=str, default=None,
-        help="Dir with corrected 4D bbox PKLs (default: <ag_root>/world_annotations/bbox_annotations_4d_corrected)",
+        help="Dir with corrected 4D bbox PKLs (default: <ag_root>/world_annotations/<phase>/bbox_annotations_4d_corrected)",
     )
     parser.add_argument(
         "--output_dir", type=str, default=None,
-        help="Output dir (default: <ag_root>/world_annotations/world_scene_graph)",
+        help="Output dir (default: <ag_root>/world_annotations/<phase>/world_scene_graph)",
     )
     parser.add_argument(
         "--video", type=str, default=None, help="Process a single video",
@@ -481,6 +487,7 @@ def main():
 
     generator = WorldSceneGraphGenerator(
         ag_root_directory=args.ag_root_directory,
+        phase=args.phase,
         augmented_rel_dir=args.augmented_rel_dir,
         bbox_4d_corrected_dir=args.bbox_4d_corrected_dir,
         output_dir=args.output_dir,

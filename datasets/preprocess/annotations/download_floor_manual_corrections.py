@@ -204,16 +204,21 @@ class ManualCorrectionDownloader:
     # Process a single video
     # ------------------------------------------------------------------
 
-    def process_video(self, video_key: str) -> bool:
+    def process_video(self, video_key: str, *, overwrite: bool = False) -> bool:
         """
         Download all corrections for a single video and save as PKL.
 
         Args:
             video_key: Firebase-sanitized video key (e.g. '001YG')
+            overwrite: If False, skip videos that already have a saved PKL.
 
         Returns:
             True if at least one correction was found and saved.
         """
+        output_path = self.output_dir / f"{video_key}.pkl"
+        if output_path.exists() and not overwrite:
+            print(f"  [Skip] {output_path} already exists (use --overwrite to re-download)")
+            return True
         video_id = self.video_key_to_id(video_key)
         print(f"\n[Processing] {video_id} (key: {video_key})")
 
@@ -268,7 +273,7 @@ class ManualCorrectionDownloader:
     # Process all videos
     # ------------------------------------------------------------------
 
-    def process_all_videos(self) -> Dict[str, bool]:
+    def process_all_videos(self, *, overwrite: bool = False) -> Dict[str, bool]:
         """Download corrections for all videos that have any correction."""
         video_keys = self.get_all_video_keys_union()
 
@@ -280,7 +285,7 @@ class ManualCorrectionDownloader:
 
         results = {}
         for video_key in video_keys:
-            results[video_key] = self.process_video(video_key)
+            results[video_key] = self.process_video(video_key, overwrite=overwrite)
 
         # Summary
         success = sum(1 for v in results.values() if v)
@@ -340,6 +345,11 @@ def main():
         default=None,
         help="Output directory for PKL files (default: /data/rohith/ag/world_annotations/manual_corrections)"
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing PKL files (default: skip if exists)"
+    )
     args = parser.parse_args()
 
     downloader = ManualCorrectionDownloader(output_dir=args.output_dir)
@@ -355,10 +365,10 @@ def main():
             video_key = ManualCorrectionDownloader.video_id_to_key(video)
         else:
             video_key = video
-        success = downloader.process_video(video_key)
+        success = downloader.process_video(video_key, overwrite=args.overwrite)
         sys.exit(0 if success else 1)
     else:
-        results = downloader.process_all_videos()
+        results = downloader.process_all_videos(overwrite=args.overwrite)
         failed = [v for v, ok in results.items() if not ok]
         if failed:
             print(f"\n[Warning] {len(failed)} videos had no corrections")

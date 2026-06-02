@@ -41,6 +41,48 @@ def get_video_belongs_to_split(video_id: str) -> Optional[str]:
     return None
 
 
+# =====================================================================
+# TRAIN / TEST PHASE RESOLUTION
+# =====================================================================
+
+_VIDEO_PHASE_CACHE: Dict[str, str] = {}
+
+
+def get_video_phase(video_id: str, ag_root: str) -> Optional[str]:
+    """Determine if a video belongs to 'train' or 'test' split.
+
+    Uses ``object_bbox_and_relationship.pkl`` metadata field
+    ``metadata.set`` which stores ``"train"`` or ``"test"`` for each
+    frame.  The mapping is built once and cached at module level.
+
+    Args:
+        video_id: Video identifier (e.g. ``"001YG.mp4"`` or ``"001YG"``).
+        ag_root:  Root directory of the Action Genome dataset.
+
+    Returns:
+        ``"train"``, ``"test"``, or ``None`` if the video is not found.
+    """
+    global _VIDEO_PHASE_CACHE
+    if not _VIDEO_PHASE_CACHE:
+        pkl_path = Path(ag_root) / "annotations" / "object_bbox_and_relationship.pkl"
+        if not pkl_path.exists():
+            print(f"[get_video_phase] WARNING: {pkl_path} not found")
+            return None
+        print(f"[get_video_phase] Loading phase map from {pkl_path} ...")
+        with open(pkl_path, "rb") as f:
+            object_bbox = pickle.load(f)
+        for frame_key, objs in object_bbox.items():
+            vid_name = frame_key.split("/")[0]
+            if vid_name not in _VIDEO_PHASE_CACHE and objs:
+                phase = objs[0].get("metadata", {}).get("set", None)
+                if phase:
+                    _VIDEO_PHASE_CACHE[vid_name] = phase
+        print(f"[get_video_phase] Cached {len(_VIDEO_PHASE_CACHE)} video→phase entries")
+
+    stem = Path(video_id).stem
+    return _VIDEO_PHASE_CACHE.get(video_id) or _VIDEO_PHASE_CACHE.get(stem)
+
+
 def _faces_u32(faces: np.ndarray) -> np.ndarray:
     faces = np.asarray(faces)
     if faces.dtype != np.uint32:
