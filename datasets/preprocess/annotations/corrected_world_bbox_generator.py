@@ -842,6 +842,38 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
             f"(source={corrected_transform['source']})"
         )
 
+        # --- Diagnostic: verify floor alignment in canonical frame ---
+        T_diag = corrected_transform["combined_transform_4x4"]
+        R_diag = T_diag[:3, :3].astype(np.float32)
+        t_diag = T_diag[:3, 3].astype(np.float32)
+
+        def _diag_to_canonical(pts):
+            return (pts @ R_diag.T) + t_diag[None, :]
+
+        if gv is not None and original_gfs is not None:
+            s_g = float(original_gfs["s"])
+            R_g = np.asarray(original_gfs["R"], dtype=np.float32)
+            t_g = np.asarray(original_gfs["t"], dtype=np.float32)
+            floor_world = s_g * (np.asarray(gv, dtype=np.float32) @ R_g.T) + t_g[None, :]
+            floor_canonical = _diag_to_canonical(floor_world)
+            floor_y = floor_canonical[:, 1]
+            print(
+                f"[corrected-bbox][{video_id}] FLOOR in canonical frame: "
+                f"Y range=[{floor_y.min():.4f}, {floor_y.max():.4f}], "
+                f"Y mean={floor_y.mean():.4f}, Y std={floor_y.std():.4f}"
+            )
+            if floor_y.std() > 0.1:
+                print(
+                    f"[corrected-bbox][{video_id}] WARNING: floor is NOT flat in "
+                    f"canonical frame (Y std={floor_y.std():.4f} > 0.1). "
+                    f"The corrected transform may not be floor-aligned!"
+                )
+        else:
+            print(
+                f"[corrected-bbox][{video_id}] WARNING: no floor mesh or "
+                f"global_floor_sim available for floor alignment diagnostic."
+            )
+
         # 4) Load dynamic points for annotated frames
         P = self._load_points_for_video(video_id)
 
@@ -1033,7 +1065,15 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
         *,
         app_id: str = "Corrected-WorldBBox",
     ) -> None:
-        """Launch rerun visualization of saved corrected world bboxes."""
+        """Launch rerun visualization of saved corrected world bboxes.
+
+        Shows two 3D panels:
+          - LEFT: World frame (raw points + bboxes + floor mesh)
+          - RIGHT: Canonical frame (corrected-transform-aligned points +
+            bboxes + floor mesh + floor grid)
+        This lets the user verify that the corrected transform actually
+        produces floor-aligned coordinates (Y ≈ 0 for the floor plane).
+        """
         import rerun as rr
 
         pkl_path = self.bbox_3d_obb_corrected_root_dir / f"{video_id[:-4]}.pkl"
@@ -1059,87 +1099,152 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
 
         # 3) Corrected floor transform (4×4 combined_transform)
         T_4x4 = None
+        R_corr = None
+        t_corr = None
         if isinstance(cft, dict) and "combined_transform_4x4" in cft:
             T_4x4 = np.asarray(cft["combined_transform_4x4"], dtype=np.float64)
             if T_4x4.shape != (4, 4):
                 T_4x4 = T_4x4.reshape(4, 4)
+            R_corr = T_4x4[:3, :3].astype(np.float32)
+            t_corr = T_4x4[:3, 3].astype(np.float32)
 
-        # 4) Floor mesh — keep in raw world frame (same as points & bboxes)
+        def _to_canonical(pts_world: np.ndarray) -> np.ndarray:
+            """Transform world-frame points to canonical frame."""
+            if R_corr is None:
+                return pts_world
+            return (pts_world @ R_corr.T) + t_corr[None, :]
+
+        # 4) Floor mesh in WORLD frame
         gv = saved.get("gv")
         gf = saved.get("gf")
         gc = saved.get("gc")
-        floor_verts = None
+        floor_verts_world = None
+        floor_verts_canonical = None
         floor_faces = None
-        if gv is not None and gf is not None:
+        if gv is not None and gf is not None and original_gfs is not None:
             gv0 = np.asarray(gv, dtype=np.float32)
-            gf0 = _faces_u32(np.asarray(gf))
-            # gv is already in world frame — no transform needed.
-            # Points, bboxes (corners_world), and floor mesh all stay in world frame.
-            floor_verts = gv0
-            floor_faces = gf0
+            floor_faces = _faces_u32(np.asarray(gf))
+            s_g = float(original_gfs["s"])
+            R_g = np.asarray(original_gfs["R"], dtype=np.float32)
+            t_g = np.asarray(original_gfs["t"], dtype=np.float32)
+            floor_verts_world = s_g * (gv0 @ R_g.T) + t_g[None, :]
+            floor_verts_canonical = _to_canonical(floor_verts_world)
 
-        # 5) Init rerun with a beautiful layout
+            # --- Diagnostic: floor Y-range in canonical frame ---
+            fy = floor_verts_canonical[:, 1]
+            print(
+                f"[vis][{video_id}] FLOOR canonical Y: "
+                f"range=[{fy.min():.4f}, {fy.max():.4f}], "
+                f"mean={fy.mean():.4f}, std={fy.std():.4f}"
+            )
+        elif gv is not None and gf is not None:
+            # No original_gfs — gv might already be in world frame
+            floor_verts_world = np.asarray(gv, dtype=np.float32)
+            floor_faces = _faces_u32(np.asarray(gf))
+            floor_verts_canonical = _to_canonical(floor_verts_world)
+
+        # 5) Init rerun with two 3D panels + one image panel
         import rerun.blueprint as rrb
 
         rr.init(app_id, spawn=True)
-        BASE = "world"
-        rr.log(BASE, rr.ViewCoordinates.RUB, static=True)
+        BASE_W = "world"
+        BASE_C = "canonical"
+        rr.log(BASE_W, rr.ViewCoordinates.RUB, static=True)
+        rr.log(BASE_C, rr.ViewCoordinates.RUB, static=True)
 
-        # Blueprint: large 3D panel left (75%), image panel right (25%)
+        # Blueprint: world panel (left), canonical panel (center), image (right)
         blueprint = rrb.Blueprint(
             rrb.Horizontal(
                 rrb.Spatial3DView(
-                    origin=f"{BASE}",
-                    name="3D Scene",
+                    origin=f"{BASE_W}",
+                    name="World Frame",
+                ),
+                rrb.Spatial3DView(
+                    origin=f"{BASE_C}",
+                    name="Canonical Frame (Floor-Aligned)",
                 ),
                 rrb.Spatial2DView(
-                    origin=f"{BASE}/cam/pinhole",
+                    origin=f"{BASE_W}/cam/pinhole",
                     name="Camera View",
                 ),
-                column_shares=[3, 1],
+                column_shares=[3, 3, 1],
             ),
             collapse_panels=True,
         )
         rr.send_blueprint(blueprint)
 
-        # 6) World coordinate frame (static)
+        # 6) Static coordinate axes for both frames
         axis_len = 1.0
-        rr.log(f"{BASE}/origin/x", rr.Arrows3D(
-            origins=[[0, 0, 0]], vectors=[[axis_len, 0, 0]], colors=[[255, 0, 0]],
-        ), static=True)
-        rr.log(f"{BASE}/origin/y", rr.Arrows3D(
-            origins=[[0, 0, 0]], vectors=[[0, axis_len, 0]], colors=[[0, 255, 0]],
-        ), static=True)
-        rr.log(f"{BASE}/origin/z", rr.Arrows3D(
-            origins=[[0, 0, 0]], vectors=[[0, 0, axis_len]], colors=[[0, 0, 255]],
-        ), static=True)
+        for base, labels in [(BASE_W, ["+X", "+Y", "+Z"]),
+                              (BASE_C, ["+X", "+Y (up)", "+Z"])]:
+            rr.log(f"{base}/origin", rr.Arrows3D(
+                origins=[[0, 0, 0]] * 3,
+                vectors=[[axis_len, 0, 0], [0, axis_len, 0], [0, 0, axis_len]],
+                colors=[[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+                labels=labels,
+            ), static=True)
+
+        # 6b) Static floor mesh in both frames
+        if floor_verts_world is not None:
+            fkw = {}
+            if gc is not None:
+                fkw["vertex_colors"] = np.asarray(gc, dtype=np.uint8)
+            else:
+                fkw["albedo_factor"] = [160, 160, 160]
+            rr.log(f"{BASE_W}/floor", rr.Mesh3D(
+                vertex_positions=floor_verts_world,
+                triangle_indices=floor_faces, **fkw,
+            ), static=True)
+
+        if floor_verts_canonical is not None:
+            fkw_c = {}
+            if gc is not None:
+                fkw_c["vertex_colors"] = np.asarray(gc, dtype=np.uint8)
+            else:
+                fkw_c["albedo_factor"] = [160, 160, 160]
+            rr.log(f"{BASE_C}/floor", rr.Mesh3D(
+                vertex_positions=floor_verts_canonical,
+                triangle_indices=floor_faces, **fkw_c,
+            ), static=True)
+
+            # Floor grid plane at Y=mean of floor in canonical frame
+            floor_y_mean = float(floor_verts_canonical[:, 1].mean())
+            grid_half = 3.0
+            grid_pts = []
+            for i in range(-6, 7):
+                v = i * 0.5
+                grid_pts.append([[v, floor_y_mean, -grid_half], [v, floor_y_mean, grid_half]])
+                grid_pts.append([[-grid_half, floor_y_mean, v], [grid_half, floor_y_mean, v]])
+            rr.log(f"{BASE_C}/floor_grid", rr.LineStrips3D(
+                strips=[np.array(s, dtype=np.float32) for s in grid_pts],
+                colors=[[100, 255, 100, 80]] * len(grid_pts),
+            ), static=True)
 
         # 7) Frame loop
         for t_idx in range(N):
             frame_name = f"{stems[t_idx]}.png"
             rr.set_time_sequence("frame", t_idx)
 
-            # Floor mesh (static, logged once per frame to keep timeline)
-            if floor_verts is not None:
-                fkw = {}
-                if gc is not None:
-                    fkw["vertex_colors"] = np.asarray(gc, dtype=np.uint8)
-                rr.log(f"{BASE}/floor", rr.Mesh3D(
-                    vertex_positions=floor_verts, triangle_indices=floor_faces, **fkw,
-                ))
-
-            # Point cloud (raw dynamic points — NOT corrected)
+            # --- Point cloud ---
             pts = points_S[t_idx].reshape(-1, 3)
             cols = colors_S[t_idx].reshape(-1, 3)
             keep = np.isfinite(pts).all(axis=1)
             if conf_S is not None:
                 cfs = conf_S[t_idx].reshape(-1)
-                keep &= cfs > np.percentile(cfs[np.isfinite(cfs)], 5) if np.isfinite(cfs).any() else keep
+                finite_cfs = cfs[np.isfinite(cfs)]
+                if finite_cfs.size > 0:
+                    keep &= cfs > np.percentile(finite_cfs, 5)
             if keep.sum() > 0:
-                rr.log(f"{BASE}/points", rr.Points3D(pts[keep], colors=cols[keep]))
+                pts_keep = pts[keep]
+                cols_keep = cols[keep]
+                rr.log(f"{BASE_W}/points", rr.Points3D(pts_keep, colors=cols_keep))
+                # Also show in canonical frame
+                pts_can = _to_canonical(pts_keep)
+                rr.log(f"{BASE_C}/points", rr.Points3D(pts_can, colors=cols_keep))
 
-            # Bbox cuboids — clear previous frame's entities first
-            rr.log(f"{BASE}/bbox", rr.Clear(recursive=True))
+            # --- Bbox cuboids (both frames) ---
+            rr.log(f"{BASE_W}/bbox", rr.Clear(recursive=True))
+            rr.log(f"{BASE_C}/bbox", rr.Clear(recursive=True))
 
             if frame_name in frames_map:
                 objs = frames_map[frame_name].get("objects", [])
@@ -1147,6 +1252,9 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
                 # Separate GT and GDino objects for batch logging
                 gt_centers, gt_halfs, gt_quats, gt_colors, gt_labels = [], [], [], [], []
                 gd_centers, gd_halfs, gd_quats, gd_colors, gd_labels = [], [], [], [], []
+                # Canonical-frame versions
+                gt_c_centers, gt_c_halfs, gt_c_quats = [], [], []
+                gd_c_centers, gd_c_halfs, gd_c_quats = [], [], []
 
                 for oi, obj in enumerate(objs):
                     corners = self._extract_corners(obj)
@@ -1156,31 +1264,49 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
                     src = obj.get("source", "gt")
                     center, half_sizes, q = self._corners_to_box_params(corners)
 
+                    # Transform corners to canonical frame for the second panel
+                    corners_can = _to_canonical(corners)
+                    center_c, half_c, q_c = self._corners_to_box_params(corners_can)
+
                     if src == "gdino":
                         gd_centers.append(center)
                         gd_halfs.append(half_sizes)
                         gd_quats.append(rr.Quaternion(xyzw=q))
                         gd_colors.append([0, 180, 255])
                         gd_labels.append(f"{label} (gdino)")
+                        gd_c_centers.append(center_c)
+                        gd_c_halfs.append(half_c)
+                        gd_c_quats.append(rr.Quaternion(xyzw=q_c))
                     else:
                         gt_centers.append(center)
                         gt_halfs.append(half_sizes)
                         gt_quats.append(rr.Quaternion(xyzw=q))
                         gt_colors.append([255, 180, 0])
                         gt_labels.append(label)
+                        gt_c_centers.append(center_c)
+                        gt_c_halfs.append(half_c)
+                        gt_c_quats.append(rr.Quaternion(xyzw=q_c))
 
                 if gt_centers:
-                    rr.log(f"{BASE}/bbox/gt", rr.Boxes3D(
+                    rr.log(f"{BASE_W}/bbox/gt", rr.Boxes3D(
                         centers=gt_centers, half_sizes=gt_halfs,
                         quaternions=gt_quats, colors=gt_colors, labels=gt_labels,
                     ))
+                    rr.log(f"{BASE_C}/bbox/gt", rr.Boxes3D(
+                        centers=gt_c_centers, half_sizes=gt_c_halfs,
+                        quaternions=gt_c_quats, colors=gt_colors, labels=gt_labels,
+                    ))
                 if gd_centers:
-                    rr.log(f"{BASE}/bbox/gdino", rr.Boxes3D(
+                    rr.log(f"{BASE_W}/bbox/gdino", rr.Boxes3D(
                         centers=gd_centers, half_sizes=gd_halfs,
                         quaternions=gd_quats, colors=gd_colors, labels=gd_labels,
                     ))
+                    rr.log(f"{BASE_C}/bbox/gdino", rr.Boxes3D(
+                        centers=gd_c_centers, half_sizes=gd_c_halfs,
+                        quaternions=gd_c_quats, colors=gd_colors, labels=gd_labels,
+                    ))
 
-            # Camera frustum (raw world frame — same as points & bboxes)
+            # Camera frustum (world frame only — same as points & bboxes)
             if cam_S is not None and t_idx < cam_S.shape[0]:
                 cam = cam_S[t_idx].astype(np.float64)
                 R_wc, t_wc = cam[:3, :3].astype(np.float32), cam[:3, 3].astype(np.float32)
@@ -1191,14 +1317,14 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
                 fx = fy
                 cx, cy = W_img / 2.0, H_img / 2.0
                 quat = SciRot.from_matrix(R_wc).as_quat().astype(np.float32)
-                rr.log(f"{BASE}/cam", rr.Transform3D(
+                rr.log(f"{BASE_W}/cam", rr.Transform3D(
                     translation=t_wc, rotation=rr.Quaternion(xyzw=quat),
                 ))
-                rr.log(f"{BASE}/cam/pinhole", rr.Pinhole(
+                rr.log(f"{BASE_W}/cam/pinhole", rr.Pinhole(
                     focal_length=(fx, fy), principal_point=(cx, cy),
                     resolution=(W_img, H_img),
                 ))
-                rr.log(f"{BASE}/cam/pinhole/image", rr.Image(img))
+                rr.log(f"{BASE_W}/cam/pinhole/image", rr.Image(img))
 
         print(f"[vis] Rerun running for {video_id}. Scrub the 'frame' timeline.")
 

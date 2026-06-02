@@ -72,10 +72,33 @@ def visualize_4D_point_clouds_open3D(points, colors, timestamps):
     vis.destroy_window()
 
 
-def visualize_4d_point_clouds(point_clouds, colors, timestamps, app_id="4d_pointcloud_demo"):
+def visualize_4d_point_clouds(point_clouds, colors, timestamps, app_id="4d_pointcloud_demo", floor=None):
+    """Visualize 4D point clouds with optional floor mesh.
+
+    Parameters
+    ----------
+    floor : tuple, optional
+        ``(vertices, faces, vertex_colors)`` or ``(vertices, faces, None)``.
+        When provided, the floor mesh is rendered as a static entity.
+    """
     # Initialize a new Rerun recording (retains UI state thanks to app_id) and launch the viewer
     rr.init(app_id)  # :contentReference[oaicite:0]{index=0}
     rr.spawn()  # :contentReference[oaicite:1]{index=1}
+
+    # Log floor mesh (static)
+    if floor is not None:
+        fv, ff = floor[0], floor[1]
+        fc = floor[2] if len(floor) > 2 else None
+        fkw = {}
+        if fc is not None:
+            fkw["vertex_colors"] = np.asarray(fc, dtype=np.uint8)
+        else:
+            fkw["albedo_factor"] = [160, 160, 160]
+        rr.log("scene/floor", rr.Mesh3D(
+            vertex_positions=np.asarray(fv, dtype=np.float32),
+            triangle_indices=np.asarray(ff, dtype=np.uint32),
+            **fkw,
+        ), static=True)
 
     # Stream each frame
     for pts, cols, t in zip(point_clouds, colors, timestamps):
@@ -125,7 +148,16 @@ def visualize_4d_point_clouds_with_segmentation(
         app_id="4d_pointcloud_segmentation_demo",
         hsv_tuples=None,
         class_colors=None,
+        floor=None,
 ):
+    """Visualize 4D point clouds with segmentation overlays and optional floor mesh.
+
+    Parameters
+    ----------
+    floor : tuple, optional
+        ``(vertices, faces, vertex_colors)`` or ``(vertices, faces, None)``.
+        When provided, the floor mesh is rendered as a static entity.
+    """
     if hsv_tuples is None and class_colors is None:
         hsv_tuples = [(i / 37.0, 1.0, 1.0) for i in range(37)]
         class_colors = np.array([
@@ -135,6 +167,21 @@ def visualize_4d_point_clouds_with_segmentation(
     # Initialize a new Rerun recording (retains UI state thanks to app_id) and launch the viewer
     rr.init(app_id)  # :contentReference[oaicite:0]{index=0}
     rr.spawn()  # :contentReference[oaicite:1]{index=1}
+
+    # Log floor mesh (static)
+    if floor is not None:
+        fv, ff = floor[0], floor[1]
+        fc = floor[2] if len(floor) > 2 else None
+        fkw = {}
+        if fc is not None:
+            fkw["vertex_colors"] = np.asarray(fc, dtype=np.uint8)
+        else:
+            fkw["albedo_factor"] = [160, 160, 160]
+        rr.log("scene/floor", rr.Mesh3D(
+            vertex_positions=np.asarray(fv, dtype=np.float32),
+            triangle_indices=np.asarray(ff, dtype=np.uint32),
+            **fkw,
+        ), static=True)
 
     # Stream each frame
     for pts, cols, t in zip(point_clouds, colors, timestamps):
@@ -195,10 +242,34 @@ def visualize_static_scene_with_segmentation(
         timestamps,
         segmentation_masks=None,
         dynamic_masks=None,
-        app_id="static_scene_segmentation_demo"
+        app_id="static_scene_segmentation_demo",
+        floor=None,
 ):
+    """Visualize static scene with segmentation overlays and optional floor mesh.
+
+    Parameters
+    ----------
+    floor : tuple, optional
+        ``(vertices, faces, vertex_colors)`` or ``(vertices, faces, None)``.
+        When provided, the floor mesh is rendered as a static entity.
+    """
     rr.init(app_id)  # :contentReference[oaicite:0]{index=0}
     rr.spawn()  # :contentReference[oaicite:1]{index=1}
+
+    # Log floor mesh (static)
+    if floor is not None:
+        fv, ff = floor[0], floor[1]
+        fc = floor[2] if len(floor) > 2 else None
+        fkw = {}
+        if fc is not None:
+            fkw["vertex_colors"] = np.asarray(fc, dtype=np.uint8)
+        else:
+            fkw["albedo_factor"] = [160, 160, 160]
+        rr.log("scene/floor", rr.Mesh3D(
+            vertex_positions=np.asarray(fv, dtype=np.float32),
+            triangle_indices=np.asarray(ff, dtype=np.uint32),
+            **fkw,
+        ), static=True)
 
     bg_pts_list = []
     bg_pt_color_list = []

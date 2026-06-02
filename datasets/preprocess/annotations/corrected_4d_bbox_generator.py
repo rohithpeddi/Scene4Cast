@@ -49,6 +49,7 @@ from annotation_utils import (
     get_video_phase,
     _faces_u32,
     _load_pkl_if_exists,
+    _npz_open,
 )
 
 from datasets.preprocess.annotations.raw.frame_to_world4D_base import (
@@ -530,7 +531,11 @@ class Corrected4DBBoxGenerator(FrameToWorldBase):
         *,
         app_id: str = "Corrected-4DBBox",
     ) -> None:
-        """Launch rerun visualization of saved corrected 4D bboxes."""
+        """Launch rerun visualization of saved corrected 4D bboxes.
+
+        Shows floor mesh and point cloud (both transformed to FINAL frame)
+        alongside 4D bounding boxes so that floor alignment can be verified.
+        """
         import rerun as rr
         from scipy.spatial.transform import Rotation as SciRot
 
@@ -545,20 +550,103 @@ class Corrected4DBBoxGenerator(FrameToWorldBase):
         frame_names = saved.get("frame_names", sorted(frames_map.keys()))
         static_labels = set(saved.get("static_labels", []))
 
-        # Load dynamic predictions for images + cameras
+        # Extract corrected transform from 4D PKL
+        cft = saved.get("corrected_floor_transform", {})
+        R_final = None
+        t_final = None
+        if isinstance(cft, dict) and "combined_transform_4x4" in cft:
+            T_4x4 = np.asarray(cft["combined_transform_4x4"], dtype=np.float64)
+            if T_4x4.shape != (4, 4):
+                T_4x4 = T_4x4.reshape(4, 4)
+            R_final = T_4x4[:3, :3].astype(np.float32)
+            t_final = T_4x4[:3, 3].astype(np.float32)
+
+        def _to_final(pts_world: np.ndarray) -> np.ndarray:
+            if R_final is None:
+                return pts_world
+            return (pts_world @ R_final.T) + t_final[None, :]
+
+        # --- Load floor mesh from corrected world bbox PKL ---
+        floor_verts_final = None
+        floor_faces = None
+        floor_kwargs = {}
+        world_pkl_path = self.bbox_3d_obb_corrected_root_dir / f"{video_id[:-4]}.pkl"
+        if world_pkl_path.exists():
+            with open(world_pkl_path, "rb") as f:
+                world_saved = pickle.load(f)
+
+            gv = world_saved.get("gv")
+            gf = world_saved.get("gf")
+            gc = world_saved.get("gc")
+            world_cft = world_saved.get("corrected_floor_transform", {})
+            original_gfs = world_cft.get("original_global_floor_sim") if isinstance(world_cft, dict) else None
+
+            if gv is not None and gf is not None:
+                gv0 = np.asarray(gv, dtype=np.float32)
+                floor_faces = _faces_u32(np.asarray(gf))
+
+                if original_gfs is not None:
+                    s_g = float(original_gfs["s"])
+                    R_g = np.asarray(original_gfs["R"], dtype=np.float32)
+                    t_g = np.asarray(original_gfs["t"], dtype=np.float32)
+                    floor_world = s_g * (gv0 @ R_g.T) + t_g[None, :]
+                else:
+                    floor_world = gv0
+
+                floor_verts_final = _to_final(floor_world)
+
+                if gc is not None:
+                    floor_kwargs["vertex_colors"] = np.asarray(gc, dtype=np.uint8)
+                else:
+                    floor_kwargs["albedo_factor"] = [160, 160, 160]
+
+                # Diagnostic
+                fy = floor_verts_final[:, 1]
+                print(
+                    f"[vis][{video_id}] FLOOR in FINAL frame: "
+                    f"Y range=[{fy.min():.4f}, {fy.max():.4f}], "
+                    f"Y mean={fy.mean():.4f}, std={fy.std():.4f}"
+                )
+
+        # Load dynamic predictions for images + cameras + points
         pred_path = self.dynamic_scene_dir_path / f"{video_id[:-4]}_10" / "predictions.npz"
         with _npz_open(pred_path) as npz:
             imgs_f32 = npz["images"]
             colors = (imgs_f32 * 255.0).clip(0, 255).astype(np.uint8)
             camera_poses = npz["camera_poses"] if "camera_poses" in npz else None
+            points = npz["points"].astype(np.float32) if "points" in npz else None
+            conf = npz["conf"].astype(np.float32) if "conf" in npz else None
 
         rr.init(app_id, spawn=True)
         BASE = "world"
         rr.log(BASE, rr.ViewCoordinates.RUB, static=True)
 
+        # Static floor mesh (in FINAL frame)
+        if floor_verts_final is not None:
+            rr.log(f"{BASE}/floor", rr.Mesh3D(
+                vertex_positions=floor_verts_final,
+                triangle_indices=floor_faces,
+                **floor_kwargs,
+            ), static=True)
+
         for t_idx, fname in enumerate(frame_names):
             rr.set_time_sequence("frame", t_idx)
 
+            # --- Point cloud (transformed to FINAL frame) ---
+            if points is not None and t_idx < points.shape[0]:
+                pts = points[t_idx].reshape(-1, 3)
+                cols = colors[t_idx].reshape(-1, 3)
+                keep = np.isfinite(pts).all(axis=1)
+                if conf is not None and t_idx < conf.shape[0]:
+                    cfs = conf[t_idx].reshape(-1) if conf.ndim == 3 else conf[t_idx, ..., 0].reshape(-1)
+                    finite_cfs = cfs[np.isfinite(cfs)]
+                    if finite_cfs.size > 0:
+                        keep &= cfs > np.percentile(finite_cfs, 5)
+                if keep.sum() > 0:
+                    pts_keep = _to_final(pts[keep])
+                    rr.log(f"{BASE}/points", rr.Points3D(pts_keep, colors=cols[keep]))
+
+            # --- 4D bounding boxes ---
             objs = frames_map.get(fname, {}).get("objects", [])
             for oi, obj in enumerate(objs):
                 corners = self._extract_corners_4d(obj)
