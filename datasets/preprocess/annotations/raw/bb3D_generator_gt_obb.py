@@ -938,11 +938,31 @@ def main():
         phase=phase,
     )
 
+    # --- Single-video mode: regenerate exactly one video's world OBB PKL. ---
+    if args.video:
+        _, full_gt = bbox_3d_generator_obb.get_video_gt_annotations(args.video)
+        gdino = bbox_3d_generator_obb.get_video_gdino_annotations(args.video)
+        bbox_3d_generator_obb.generate_video_bb_annotations(
+            video_id=args.video,
+            video_gt_annotations=full_gt,
+            video_gdino_predictions=gdino,
+            visualize=False,
+            overwrite=args.overwrite,
+        )
+        return
+
+    # --- Batch mode: only sweep the requested phase(s). ---
+    # phase=None  -> both train+test (legacy behaviour)
+    # phase=test  -> test only   (what the corrected/Firebase pipeline needs)
+    # phase=train -> train only
     train_dataset, test_dataset, dataloader_train, dataloader_test = load_dataset(ag_root)
-    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=split, overwrite=args.overwrite)
-    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_test, split=split, overwrite=args.overwrite)
+    if phase in (None, "train"):
+        bbox_3d_generator_obb.generate_gt_world_bb_annotations(
+            dataloader=dataloader_train, split=split, overwrite=args.overwrite)
+    if phase in (None, "test"):
+        bbox_3d_generator_obb.generate_gt_world_bb_annotations(
+            dataloader=dataloader_test, split=split, overwrite=args.overwrite)
 
 
 if __name__ == "__main__":
-    # main()
-    main_sample()
+    main()

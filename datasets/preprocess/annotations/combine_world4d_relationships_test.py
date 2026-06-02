@@ -16,8 +16,10 @@ this script reads the test augmentation PKLs produced by
 Inputs:
   - ``<ag_root>/wsg_2d_augmentations/<video>.pkl``
     (from ``augment_relationships_test.py``)
-  - ``<ag_root>/world_annotations/bbox_annotations_4d/<video>.pkl``
-    (from ``frame_to_world4D_annotations.py``)
+  - ``<ag_root>/world_annotations/<phase>/bbox_annotations_4d_corrected/<video>.pkl``
+    (from ``corrected_4d_bbox_generator.py`` — the manually-corrected-floor 4D
+    boxes. NOTE: this is the ``*_corrected`` dir, NOT the stale raw
+    ``bbox_annotations_4d`` produced by ``frame_to_world4D_annotations.py``.)
 
 Output:
   - ``<ag_root>/world4d_rel_annotations/test/<video>.pkl``
