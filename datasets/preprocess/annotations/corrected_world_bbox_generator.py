@@ -847,6 +847,12 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
         R_diag = T_diag[:3, :3].astype(np.float32)
         t_diag = T_diag[:3, 3].astype(np.float32)
 
+        print(
+            f"[corrected-bbox][{video_id}] corrected T_4x4:\n"
+            f"  R = {R_diag.tolist()}\n"
+            f"  t = {t_diag.tolist()}"
+        )
+
         def _diag_to_canonical(pts):
             return (pts @ R_diag.T) + t_diag[None, :]
 
@@ -854,6 +860,44 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
             s_g = float(original_gfs["s"])
             R_g = np.asarray(original_gfs["R"], dtype=np.float32)
             t_g = np.asarray(original_gfs["t"], dtype=np.float32)
+
+            # --- Compare corrected transform vs original T_auto ---
+            # Build T_auto from original_global_floor_sim (same logic as
+            # build_corrected_transform Priority 2, i.e. what the composed
+            # path would produce if there were no delta/XY corrections)
+            R_g64 = R_g.astype(np.float64)
+            t_g64 = t_g.astype(np.float64)
+            t1 = R_g64[:, 0]
+            t2 = R_g64[:, 2]
+            n  = R_g64[:, 1]
+            F = np.stack([t1, t2, n], axis=1)
+            R_align = F.T
+            M_mirror = np.diag([-1.0, 1.0, 1.0])
+            R_auto = M_mirror @ R_align
+            t_auto = -R_auto @ t_g64
+
+            T_auto = np.eye(4, dtype=np.float64)
+            T_auto[:3, :3] = R_auto
+            T_auto[:3, 3] = t_auto
+
+            diff_norm = np.linalg.norm(
+                T_diag.astype(np.float64) - T_auto
+            )
+            print(
+                f"[corrected-bbox][{video_id}] T_auto (from original global_floor_sim):\n"
+                f"  R_auto = {R_auto.astype(np.float32).tolist()}\n"
+                f"  t_auto = {t_auto.astype(np.float32).tolist()}\n"
+                f"  ||T_corrected - T_auto|| = {diff_norm:.6f}"
+            )
+            if diff_norm < 0.01:
+                print(
+                    f"[corrected-bbox][{video_id}] ⚠️  CORRECTED TRANSFORM IS "
+                    f"NEARLY IDENTICAL TO ORIGINAL T_auto (diff={diff_norm:.6f})! "
+                    f"The final_alignment may just be the original auto-computed "
+                    f"transform re-saved without any manual corrections."
+                )
+
+            # Floor mesh diagnostic
             floor_world = s_g * (np.asarray(gv, dtype=np.float32) @ R_g.T) + t_g[None, :]
             floor_canonical = _diag_to_canonical(floor_world)
             floor_y = floor_canonical[:, 1]
