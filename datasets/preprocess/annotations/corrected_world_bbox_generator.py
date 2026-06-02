@@ -341,6 +341,7 @@ class CorrectedWorldBBoxGenerator(BBox3DBase):
         super().__init__(
             dynamic_scene_dir_path=dynamic_scene_dir_path,
             ag_root_directory=ag_root_directory,
+            phase=phase,
         )
 
         self.phase = phase
