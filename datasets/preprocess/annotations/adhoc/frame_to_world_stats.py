@@ -19,6 +19,8 @@ sys.path.insert(0, os.path.dirname(__file__) + "/..")
 
 from dataloader.standard.action_genome.ag_dataset import StandardAG
 
+from config_utils import load_config, resolve_common, first, add_config_arg
+
 from annotation_utils import (
     get_video_belongs_to_split,
     _load_pkl_if_exists,
@@ -429,13 +431,10 @@ def run_statistics_estimations(
 
 def parse_args():
     p = argparse.ArgumentParser(description="FrameToWorld stats estimators (refactored).")
-    p.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    p.add_argument(
-        "--dynamic_scene_dir_path",
-        type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
-    )
-    p.add_argument("--split", type=str, default="04")
+    add_config_arg(p)
+    p.add_argument("--ag_root_directory", type=str, default=None)
+    p.add_argument("--dynamic_scene_dir_path", type=str, default=None)
+    p.add_argument("--split", type=str, default=None)
 
     # what to run
     p.add_argument("--run_mismatch", action="store_true", help="run 2D/3D mismatch estimation")
@@ -451,7 +450,14 @@ def parse_args():
 
 def main():
     args = parse_args()
-    _, _, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    stats_cfg = config.get("frame_to_world_stats", {})
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    split = first(args.split, stats_cfg.get("split"), default="04")
+
+    _, _, dataloader_train, dataloader_test = load_dataset(ag_root)
 
     if args.run_all:
         run_mismatch = True
@@ -467,9 +473,9 @@ def main():
             run_combine = True
 
     results = run_statistics_estimations(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        split=args.split,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        split=split,
         train_dataloader=dataloader_train,
         test_dataloader=dataloader_test,
         run_mismatch=run_mismatch,

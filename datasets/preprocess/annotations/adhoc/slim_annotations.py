@@ -18,8 +18,13 @@ Usage:
 import argparse
 import os
 import pickle
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from config_utils import load_config, resolve_common, first, add_config_arg
 
 
 # ---------------------------------------------------------------------------
@@ -184,9 +189,10 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Create lightweight annotation PKLs for monocular 3D detector training."
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
     parser.add_argument(
-        "--input_dir", type=str, default="bbox_annotations_3d_obb_camera_intrinsics",
+        "--input_dir", type=str, default=None,
         help="Name of the input annotation directory under world_annotations/"
     )
     parser.add_argument("--overwrite", action="store_true")
@@ -195,8 +201,16 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    slim_cfg = config.get("slim_annotations", {})
+    ag_root, _, _ = resolve_common(args, config)
+    input_dir = first(args.input_dir, slim_cfg.get("input_dir"),
+                      default="bbox_annotations_3d_obb_camera_intrinsics")
+
     create_slim_annotations(
-        ag_root_directory=args.ag_root_directory,
-        input_dir_name=args.input_dir,
+        ag_root_directory=ag_root,
+        input_dir_name=input_dir,
         overwrite=args.overwrite,
     )

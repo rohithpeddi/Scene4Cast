@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import json
 import os
 
@@ -6,6 +7,9 @@ import numpy as np
 import torch
 
 from dataloader.base_ag_dataset import BaseAG
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
 
 
 def to_jsonable(v):
@@ -39,9 +43,26 @@ def clean_gt_frame_items(frame_items):
     return cleaned
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Generate COCO-format GT annotations from the AG dataset.",
+    )
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Output dir for GT annotation JSONs (overrides config)")
+    return parser.parse_args()
+
+
 def main():
-    ag_root_directory = "/data/rohith/ag/"
-    output_directory = "/data/rohith/ag/ag4D/gt_annotations/"
+    args = parse_args()
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    gt_cfg = config.get("gt_generator", {})
+    ag_root_directory, _, _ = resolve_common(args, config)
+    output_directory = first(args.output_dir, gt_cfg.get("output_dir"),
+                             default="/data/rohith/ag/ag4D/gt_annotations/")
     os.makedirs(output_directory, exist_ok=True)
 
     dataset = BaseAG(

@@ -30,11 +30,16 @@ import argparse
 import io
 import os
 import pickle
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import joblib
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from config_utils import load_config, resolve_common, first, add_config_arg
 
 
 class _NumpyCompatUnpickler(pickle.Unpickler):
@@ -255,8 +260,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Attach camera intrinsics from human pipeline to OBB camera-frame annotations."
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    parser.add_argument("--human_dir", type=str, default="/data2/rohith/ag/ag4D/human")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
+    parser.add_argument("--human_dir", type=str, default=None)
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing merged PKLs")
     parser.add_argument(
         "--inspect", type=str, default=None,
@@ -268,15 +274,21 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    adhoc_cfg = config.get("attach_intrinsics", {})
+    ag_root, _, _ = resolve_common(args, config)
+    human_dir = first(args.human_dir, adhoc_cfg.get("human_dir"), default="/data2/rohith/ag/ag4D/human")
+
     if args.inspect:
         inspect_sample(
-            ag_root_directory=args.ag_root_directory,
-            human_dir=args.human_dir,
+            ag_root_directory=ag_root,
+            human_dir=human_dir,
             video_id=args.inspect,
         )
     else:
         attach_intrinsics(
-            ag_root_directory=args.ag_root_directory,
-            human_dir=args.human_dir,
+            ag_root_directory=ag_root,
+            human_dir=human_dir,
             overwrite=args.overwrite,
         )

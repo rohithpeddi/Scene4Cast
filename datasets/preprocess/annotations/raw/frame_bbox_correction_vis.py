@@ -13,6 +13,9 @@ import rerun as rr
 from torch.utils.data import DataLoader
 
 from dataloader.ag_dataset import StandardAG
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
 from datasets.preprocess.annotations.annotation_utils import (
     get_video_belongs_to_split,
     _load_pkl_if_exists,
@@ -1517,31 +1520,34 @@ def parse_args():
             "for annotated frames."
         )
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    parser.add_argument(
-        "--dynamic_scene_dir_path",
-        type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
-    )
-    parser.add_argument("--split", type=str, default="04")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
+    parser.add_argument("--dynamic_scene_dir_path", type=str, default=None)
+    parser.add_argument("--split", type=str, default=None)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    vis_cfg = config.get("frame_bbox_correction_vis", {})
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    split = first(args.split, vis_cfg.get("split"), default="04")
+
     frame_to_world_generator = FrameToWorldAnnotations(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
     )
-    _, _, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
+    _, _, dataloader_train, dataloader_test = load_dataset(ag_root)
 
     # Example: run over one split
     frame_to_world_generator.generate_gt_world_3D_bb_annotations(
-        dataloader=dataloader_train, split=args.split
+        dataloader=dataloader_train, split=split
     )
     frame_to_world_generator.generate_gt_world_3D_bb_annotations(
-        dataloader=dataloader_test, split=args.split
+        dataloader=dataloader_test, split=split
     )
 
 
@@ -1553,9 +1559,13 @@ def main_sample():
     """
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+
     frame_to_world_generator = FrameToWorldAnnotations(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
     )
     video_id = "0DJ6R.mp4"
     frame_to_world_generator.generate_sample_gt_world_3D_annotations(video_id=video_id)

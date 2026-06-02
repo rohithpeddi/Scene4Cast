@@ -120,6 +120,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 from tqdm import tqdm
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config_utils import load_config, resolve_common, first, add_config_arg
+
 # ---------------------------------------------------------------------------
 # Label normalization (short-form ↔ full AG name)
 # ---------------------------------------------------------------------------
@@ -524,8 +528,9 @@ def parse_args():
             "3D bounding box annotations into a unified per-video PKL."
         ),
     )
+    add_config_arg(parser)
     parser.add_argument(
-        "--ag_root_directory", type=str, default="/data/rohith/ag",
+        "--ag_root_directory", type=str, default=None,
     )
     parser.add_argument(
         "--phase", type=str, default="train", choices=["train", "test"],
@@ -554,7 +559,11 @@ def main():
     import random
 
     args = parse_args()
-    ag_root = Path(args.ag_root_directory)
+
+    # Load config and resolve ag_root (CLI > config > default)
+    config = load_config(args.config)
+    ag_root_dir = first(args.ag_root_directory, config.get("ag_root_directory"), default="/data/rohith/ag")
+    ag_root = Path(ag_root_dir)
 
     rel_dir = ag_root / "world_rel_annotations" / args.phase
     w4d_dir = ag_root / "world_annotations" / "bbox_annotations_4d"

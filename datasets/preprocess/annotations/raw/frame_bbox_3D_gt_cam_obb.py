@@ -18,6 +18,9 @@ import pickle
 import rerun as rr
 
 from dataloader.ag_dataset import StandardAG
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
 from datasets.preprocess.annotations.raw.frame_bbox_3D_base import FrameToWorldAnnotationsBase
 
 
@@ -479,15 +482,12 @@ def parse_args():
             "(b) visualize OBB bounding boxes in camera coordinate frame."
         )
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    parser.add_argument(
-        "--dynamic_scene_dir_path",
-        type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
-    )
-    parser.add_argument("--split", type=str, default="04")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
+    parser.add_argument("--dynamic_scene_dir_path", type=str, default=None)
+    parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--phase", type=str, default=None, choices=["train", "test"],
-                        help="Dataset phase. Routes outputs to world_annotations/<phase>/...")
+                        help="Dataset phase. Overrides config if provided.")
     parser.add_argument("--video", type=str, default=None, help="Process a single video")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing PKL files")
     return parser.parse_args()
@@ -496,15 +496,21 @@ def parse_args():
 def main():
     args = parse_args()
 
-    frame_to_world_generator = FrameToWorldAnnotationsOBB(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        phase=args.phase,
-    )
-    _, _, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    frame_cfg = config.get("frame_bbox_3d_gt_cam_obb", {})
+    ag_root, dynamic_scene_dir, phase = resolve_common(args, config)
+    split = first(args.split, frame_cfg.get("split"), default="04")
 
-    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_train, split=args.split, overwrite=args.overwrite)
-    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_test, split=args.split, overwrite=args.overwrite)
+    frame_to_world_generator = FrameToWorldAnnotationsOBB(
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        phase=phase,
+    )
+    _, _, dataloader_train, dataloader_test = load_dataset(ag_root)
+
+    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_train, split=split, overwrite=args.overwrite)
+    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_test, split=split, overwrite=args.overwrite)
 
 
 def main_sample():
@@ -516,9 +522,13 @@ def main_sample():
     """
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+
     frame_to_world_generator = FrameToWorldAnnotationsOBB(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
     )
     video_id = "00MFE.mp4"
     # frame_to_world_generator.build_frames_final_and_store(video_id=video_id, overwrite=False)

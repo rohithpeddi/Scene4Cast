@@ -99,6 +99,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 from tqdm import tqdm
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config_utils import load_config, resolve_common, first, add_config_arg
+
 # ---------------------------------------------------------------------------
 # Relationship label vocabulary (Action Genome)
 # ---------------------------------------------------------------------------
@@ -857,10 +861,11 @@ def main():
             "missing-object relationships into per-video pkl files."
         ),
     )
+    add_config_arg(parser)
     parser.add_argument(
         "--ag_root_directory", type=str,
-        default="/data/rohith/ag",
-        help="Root directory of the Action Genome dataset",
+        default=None,
+        help="Root directory of the Action Genome dataset (overrides config)",
     )
     parser.add_argument(
         "--rag_results_dir", type=str,
@@ -905,6 +910,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Load config and resolve ag_root (CLI > config > default)
+    config = load_config(args.config)
+    args.ag_root_directory = first(
+        args.ag_root_directory, config.get("ag_root_directory"), default="/data/rohith/ag")
 
     # Resolve RAG results dir
     if args.rag_results_dir is None:

@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 
 from datasets.preprocess.annotations.raw.frame_to_world_base import FrameToWorldBase
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
 from dataloader.standard.action_genome.ag_dataset import StandardAG
 
 
@@ -886,12 +889,9 @@ def save_compiled_stats_json(compiled: Dict[str, Any], out_path: str) -> None:
 
 def parse_args():
     p = argparse.ArgumentParser(description="Missing 3D box stats (frame + video, train/test compilation).")
-    p.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    p.add_argument(
-        "--dynamic_scene_dir_path",
-        type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
-    )
+    add_config_arg(p)
+    p.add_argument("--ag_root_directory", type=str, default=None)
+    p.add_argument("--dynamic_scene_dir_path", type=str, default=None)
 
     # run modes
     p.add_argument("--run_single_video", action="store_true", help="run stats for one video_id")
@@ -981,6 +981,12 @@ def main_missing3d_stats_train_test(args) -> None:
 
 def main():
     args = parse_args()
+
+    # Load config and resolve CLI > config > default (assign back for downstream helpers)
+    config = load_config(args.config)
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    args.ag_root_directory = ag_root
+    args.dynamic_scene_dir_path = dynamic_scene_dir
 
     if args.run_single_video:
         main_missing3d_stats_single_video(args)

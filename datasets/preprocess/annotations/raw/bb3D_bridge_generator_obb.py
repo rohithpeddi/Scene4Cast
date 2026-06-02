@@ -27,6 +27,9 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
 from datasets.preprocess.annotations.raw.frame_bbox_3D_base import (
     FrameToWorldAnnotationsBase,
 )
@@ -732,26 +735,31 @@ def load_dataset(ag_root_directory: str):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Bridge: merge GDino into OBB PKL + WORLD→FINAL")
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    parser.add_argument(
-        "--dynamic_scene_dir_path",
-        type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
-    )
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
+    parser.add_argument("--dynamic_scene_dir_path", type=str, default=None)
     parser.add_argument("--video", type=str, default=None, help="Single video_id (e.g., 00T1E.mp4)")
-    parser.add_argument("--split", type=str, default="04")
+    parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--visualize", action="store_true")
-    parser.add_argument("--gdino_score_thr", type=float, default=0.3)
+    parser.add_argument("--gdino_score_thr", type=float, default=None)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    logger.info(f"=== Bridge OBB started | args={vars(args)} | log_file={_LOG_FILE} ===")
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    bridge_cfg = config.get("bb3d_bridge_generator_obb", {})
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    split = first(args.split, bridge_cfg.get("split"), default="04")
+    gdino_score_thr = first(args.gdino_score_thr, bridge_cfg.get("gdino_score_thr"), default=0.3)
+
+    logger.info(f"=== Bridge OBB started | config={args.config} | log_file={_LOG_FILE} ===")
     bridge = BBox3DBridgeOBB(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
     )
 
     if args.video:
@@ -759,22 +767,22 @@ def main():
         bridge.bridge_video(
             args.video,
             overwrite=args.overwrite,
-            gdino_score_thr=args.gdino_score_thr,
+            gdino_score_thr=gdino_score_thr,
         )
         if args.visualize:
             bridge.visualize_bridge_result(args.video)
     else:
         # Batch mode via dataloader
-        _, _, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
+        _, _, dataloader_train, dataloader_test = load_dataset(ag_root)
         for dataloader in [dataloader_train, dataloader_test]:
             for data in tqdm(dataloader, desc="Bridge"):
                 video_id = data["video_id"]
-                if get_video_belongs_to_split(video_id) == args.split:
+                if get_video_belongs_to_split(video_id) == split:
                     try:
                         bridge.bridge_video(
                             video_id,
                             overwrite=args.overwrite,
-                            gdino_score_thr=args.gdino_score_thr,
+                            gdino_score_thr=gdino_score_thr,
                         )
                     except Exception as e:
                         logger.error(f"[bridge] Error processing {video_id}: {e}", exc_info=True)

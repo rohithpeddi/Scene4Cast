@@ -22,13 +22,19 @@ import argparse
 import logging
 import os
 import pickle
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from tqdm import tqdm
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config_utils import load_config, resolve_common, first, add_config_arg
+
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Object class vocabulary (Action Genome)
@@ -451,24 +457,26 @@ def parse_args():
             "into unified world scene graph PKLs."
         ),
     )
+    add_config_arg(parser)
     parser.add_argument(
-        "--ag_root_directory", type=str, default="/data/rohith/ag",
+        "--ag_root_directory", type=str, default=None,
+        help="Root directory (overrides config if provided)"
     )
     parser.add_argument(
-        "--phase", type=str, required=True, choices=["train", "test"],
-        help="Dataset phase (required). Inputs/outputs go to world_annotations/<phase>/...",
+        "--phase", type=str, default=None, choices=["train", "test"],
+        help="Dataset phase. Overrides config if provided.",
     )
     parser.add_argument(
         "--augmented_rel_dir", type=str, default=None,
-        help="Dir with augmented relationship PKLs (default: <ag_root>/world_annotations/augmented_relationships)",
+        help="Dir with augmented relationship PKLs (overrides config)",
     )
     parser.add_argument(
         "--bbox_4d_corrected_dir", type=str, default=None,
-        help="Dir with corrected 4D bbox PKLs (default: <ag_root>/world_annotations/<phase>/bbox_annotations_4d_corrected)",
+        help="Dir with corrected 4D bbox PKLs (overrides config)",
     )
     parser.add_argument(
         "--output_dir", type=str, default=None,
-        help="Output dir (default: <ag_root>/world_annotations/<phase>/world_scene_graph)",
+        help="Output dir (overrides config)",
     )
     parser.add_argument(
         "--video", type=str, default=None, help="Process a single video",
@@ -480,17 +488,37 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    world_sg_cfg = config.get("world_scene_graph", {})
+    ag_root, _, phase = resolve_common(args, config, default_phase="test")
+    augmented_rel_dir = first(
+        args.augmented_rel_dir,
+        world_sg_cfg.get("augmented_relationships_dir"),
+        default=f"{ag_root}/wsg_2d_augmentations",
+    )
+    bbox_4d_corrected_dir = first(
+        args.bbox_4d_corrected_dir,
+        world_sg_cfg.get("corrected_4d_bbox_dir"),
+        default=f"{ag_root}/world_annotations/{phase}/bbox_annotations_4d_corrected",
+    )
+    output_dir = first(
+        args.output_dir,
+        world_sg_cfg.get("output_dir"),
+        default=f"{ag_root}/world_scene_graph",
+    )
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
     generator = WorldSceneGraphGenerator(
-        ag_root_directory=args.ag_root_directory,
-        phase=args.phase,
-        augmented_rel_dir=args.augmented_rel_dir,
-        bbox_4d_corrected_dir=args.bbox_4d_corrected_dir,
-        output_dir=args.output_dir,
+        ag_root_directory=ag_root,
+        phase=phase,
+        augmented_rel_dir=augmented_rel_dir,
+        bbox_4d_corrected_dir=bbox_4d_corrected_dir,
+        output_dir=output_dir,
     )
 
     if args.video:

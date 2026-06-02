@@ -34,6 +34,8 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(__file__) + "/..")
 
+from config_utils import load_config, resolve_common, first, add_config_arg
+
 from annotation_utils import (
     get_video_belongs_to_split,
     get_video_phase,
@@ -1239,18 +1241,17 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate corrected world 3D bboxes using manual floor corrections."
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
     parser.add_argument(
-        "--dynamic_scene_dir_path", type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
+        "--dynamic_scene_dir_path", type=str, default=None,
     )
     parser.add_argument(
-        "--manual_corrections_dir", type=str,
-        default="/data/rohith/ag/world_annotations/manual_corrections",
+        "--manual_corrections_dir", type=str, default=None,
     )
     parser.add_argument(
-        "--phase", type=str, required=True, choices=["train", "test"],
-        help="Dataset phase (required). Outputs go to world_annotations/<phase>/...",
+        "--phase", type=str, default=None, choices=["train", "test"],
+        help="Dataset phase. Overrides config if provided.",
     )
     parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--video", type=str, default=None, help="Process single video")
@@ -1273,11 +1274,20 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    ag_root, dynamic_scene_dir, phase = resolve_common(args, config, default_phase="test")
+    manual_corrections_dir = first(
+        args.manual_corrections_dir,
+        config.get("manual_corrections", {}).get("output_dir"),
+        default="/data/rohith/ag/world_annotations/manual_corrections",
+    )
+
     generator = CorrectedWorldBBoxGenerator(
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        ag_root_directory=args.ag_root_directory,
-        manual_corrections_dir=args.manual_corrections_dir,
-        phase=args.phase,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        ag_root_directory=ag_root,
+        manual_corrections_dir=manual_corrections_dir,
+        phase=phase,
     )
     generator.gdino_score_threshold = args.gdino_score_threshold
 

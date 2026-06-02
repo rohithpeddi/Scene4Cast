@@ -42,6 +42,8 @@ from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(__file__) + "/..")
 sys.path.insert(0, os.path.dirname(__file__))
 
+from config_utils import load_config, resolve_common, first, add_config_arg
+
 from annotation_utils import (
     get_video_belongs_to_split,
     get_video_phase,
@@ -636,14 +638,14 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate corrected 4D bbox annotations from corrected world bboxes.",
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
     parser.add_argument(
-        "--dynamic_scene_dir_path", type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
+        "--dynamic_scene_dir_path", type=str, default=None,
     )
     parser.add_argument(
-        "--phase", type=str, required=True, choices=["train", "test"],
-        help="Dataset phase (required). Inputs/outputs go to world_annotations/<phase>/...",
+        "--phase", type=str, default=None, choices=["train", "test"],
+        help="Dataset phase. Overrides config if provided.",
     )
     parser.add_argument("--split", type=str, default=None)
     parser.add_argument(
@@ -664,10 +666,14 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    ag_root, dynamic_scene_dir, phase = resolve_common(args, config, default_phase="test")
+
     generator = Corrected4DBBoxGenerator(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        phase=args.phase,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        phase=phase,
     )
 
     if args.visualize:
@@ -697,10 +703,13 @@ def main_sample():
     args = parse_args()
     video_id = args.video or "001YG.mp4"
 
+    config = load_config(args.config)
+    ag_root, dynamic_scene_dir, phase = resolve_common(args, config, default_phase="test")
+
     generator = Corrected4DBBoxGenerator(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        phase=args.phase,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        phase=phase,
     )
 
     # Generate (skips if already exists unless --overwrite)

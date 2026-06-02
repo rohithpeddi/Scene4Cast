@@ -59,6 +59,7 @@ import pickle
 import logging
 import argparse
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Set, Any, Optional
 
 import numpy as np
@@ -68,7 +69,9 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, '..', '..'))
 sys.path.insert(0, _PROJECT_ROOT)
 sys.path.insert(0, os.path.join(_SCRIPT_DIR, '..'))
+sys.path.insert(0, _SCRIPT_DIR)
 
+from config_utils import load_config, resolve_common, first, add_config_arg
 
 from backend.gold.video_ag_loader import VideoAGLoader
 from backend.evaluation.label_constants import (
@@ -642,18 +645,18 @@ def main():
     parser = argparse.ArgumentParser(
         description="Augment AG GT annotations with human corrections for missing objects",
     )
+    add_config_arg(parser)
     parser.add_argument(
-        "--ag_root_directory", type=str,
-        default="/data/rohith/ag",
-        help="Root directory of the Action Genome dataset",
+        "--ag_root_directory", type=str, default=None,
+        help="Root directory of the Action Genome dataset (overrides config)",
     )
     parser.add_argument(
-        "--corrections_dir", type=str, default="/data/rohith/ag/wsg_corrections/",
-        help="Directory containing downloaded correction PKL files",
+        "--corrections_dir", type=str, default=None,
+        help="Directory containing downloaded correction PKL files (overrides config)",
     )
     parser.add_argument(
-        "--output_dir", type=str, default="/data/rohith/ag/wsg_2d_augmentations/",
-        help="Directory to save augmented annotation PKL files",
+        "--output_dir", type=str, default=None,
+        help="Directory to save augmented annotation PKL files (overrides config)",
     )
     parser.add_argument(
         "--video", type=str, default=None,
@@ -665,10 +668,26 @@ def main():
     )
     args = parser.parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    augment_cfg = config.get("augment_relationships", {})
+    ag_root, _, _ = resolve_common(args, config)
+    corrections_dir = first(
+        args.corrections_dir,
+        augment_cfg.get("corrections_dir"),
+        config.get("manual_corrections", {}).get("output_dir"),
+        default="/data/rohith/ag/world_annotations/manual_corrections",
+    )
+    output_dir = first(
+        args.output_dir,
+        augment_cfg.get("output_dir"),
+        default="/data/rohith/ag/wsg_2d_augmentations",
+    )
+
     augment_all(
-        ag_root_directory=args.ag_root_directory,
-        corrections_dir=args.corrections_dir,
-        output_dir=args.output_dir,
+        ag_root_directory=ag_root,
+        corrections_dir=corrections_dir,
+        output_dir=output_dir,
         video_id=args.video,
         overwrite=args.overwrite,
     )

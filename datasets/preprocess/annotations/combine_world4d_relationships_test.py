@@ -118,6 +118,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 from tqdm import tqdm
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config_utils import load_config, resolve_common, first, add_config_arg
+
+
 # ---------------------------------------------------------------------------
 # Label normalization (short-form ↔ full AG name)
 # ---------------------------------------------------------------------------
@@ -634,12 +639,14 @@ def parse_args():
             "world4D 3D bounding box annotations into a unified per-video PKL."
         ),
     )
+    add_config_arg(parser)
     parser.add_argument(
-        "--ag_root_directory", type=str, default="/data/rohith/ag",
+        "--ag_root_directory", type=str, default=None,
+        help="Root directory (overrides config if provided)"
     )
     parser.add_argument(
-        "--phase", type=str, required=True, choices=["train", "test"],
-        help="Dataset phase (required). Reads 4D bboxes from world_annotations/<phase>/...",
+        "--phase", type=str, default=None, choices=["train", "test"],
+        help="Dataset phase. Overrides config if provided.",
     )
     parser.add_argument(
         "--overwrite", action="store_true", default=False,
@@ -656,12 +663,17 @@ def main():
     import random
 
     args = parse_args()
-    ag_root = Path(args.ag_root_directory)
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    ag_root_dir, _, phase = resolve_common(args, config, default_phase="test")
+
+    ag_root = Path(ag_root_dir)
 
     # Test augmented PKLs from augment_relationships_test.py
     rel_dir = ag_root / "wsg_2d_augmentations"
-    w4d_dir = ag_root / "world_annotations" / args.phase / "bbox_annotations_4d_corrected"
-    output_dir = ag_root / "world4d_rel_annotations" / args.phase
+    w4d_dir = ag_root / "world_annotations" / phase / "bbox_annotations_4d_corrected"
+    output_dir = ag_root / "world4d_rel_annotations" / phase
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Augmented rel dir:  {rel_dir}")

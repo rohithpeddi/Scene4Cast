@@ -17,6 +17,10 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(__file__) + '/..')
 
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
+
 # from AG / human pipeline codebase
 from dataloader.ag_dataset import StandardAG
 
@@ -1618,11 +1622,11 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Combined: (a) floor-aligned 3D bbox generator + (b) SMPL↔PI3 human mesh aligner (sampled frames only)."
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    parser.add_argument("--dynamic_scene_dir_path", type=str,
-                        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic")
-    parser.add_argument("--output_human_dir_path", type=str, default="/data/rohith/ag/ag4D/human/")
-    parser.add_argument("--split", type=str, default="04")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
+    parser.add_argument("--dynamic_scene_dir_path", type=str, default=None)
+    parser.add_argument("--output_human_dir_path", type=str, default=None)
+    parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--include_dense", action="store_true",
                         help="use dense correspondences for human aligner")
     return parser.parse_args()
@@ -1630,23 +1634,38 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    bb3d_cfg = config.get("bb3d_generator_gt", {})
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    output_human_dir = first(args.output_human_dir_path, bb3d_cfg.get("output_human_dir_path"),
+                             default="/data/rohith/ag/ag4D/human/")
+    split = first(args.split, bb3d_cfg.get("split"), default="04")
+
     bbox_3d_generator = BBox3DGenerator(
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        ag_root_directory=args.ag_root_directory,
-        output_human_dir_path=args.output_human_dir_path,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        ag_root_directory=ag_root,
+        output_human_dir_path=output_human_dir,
     )
-    train_dataset, test_dataset, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
-    bbox_3d_generator.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=args.split)
-    bbox_3d_generator.generate_gt_world_bb_annotations(dataloader=dataloader_test, split=args.split)
+    train_dataset, test_dataset, dataloader_train, dataloader_test = load_dataset(ag_root)
+    bbox_3d_generator.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=split)
+    bbox_3d_generator.generate_gt_world_bb_annotations(dataloader=dataloader_test, split=split)
 
 
 def main_sample():
     args = parse_args()
 
+    config = load_config(args.config)
+    bb3d_cfg = config.get("bb3d_generator_gt", {})
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    output_human_dir = first(args.output_human_dir_path, bb3d_cfg.get("output_human_dir_path"),
+                             default="/data/rohith/ag/ag4D/human/")
+
     bbox_3d_generator = BBox3DGenerator(
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        ag_root_directory=args.ag_root_directory,
-        output_human_dir_path=args.output_human_dir_path,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        ag_root_directory=ag_root,
+        output_human_dir_path=output_human_dir,
     )
     video_id = "0DJ6R.mp4"
     bbox_3d_generator.generate_sample_gt_world_bb_annotations(video_id=video_id)

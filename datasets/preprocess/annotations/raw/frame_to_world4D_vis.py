@@ -14,6 +14,9 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dataloader.ag_dataset import StandardAG
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
 from datasets.preprocess.annotations.annotation_utils import (
     get_video_belongs_to_split,
     _load_pkl_if_exists,
@@ -593,13 +596,10 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Generate World 4D BBox Annotations (fill missing + static union)."
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    parser.add_argument(
-        "--dynamic_scene_dir_path",
-        type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
-    )
-    parser.add_argument("--split", type=str, default="04")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
+    parser.add_argument("--dynamic_scene_dir_path", type=str, default=None)
+    parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--visualize", action="store_true", help="Visualize results in Rerun")
     return parser.parse_args()
 
@@ -607,16 +607,22 @@ def parse_args():
 def main():
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    vis_cfg = config.get("frame_to_world4d_vis", {})
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    split = first(args.split, vis_cfg.get("split"), default="04")
+
     generator = FrameToWorldAnnotations(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
     )
-    _, _, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
+    _, _, dataloader_train, dataloader_test = load_dataset(ag_root)
 
     # Process train
     for data in tqdm(dataloader_train, desc="Processing Train"):
         video_id = data["video_id"]
-        if get_video_belongs_to_split(video_id) != args.split:
+        if get_video_belongs_to_split(video_id) != split:
             continue
         try:
             generator.generate_video_world_bb_annotations(
@@ -632,7 +638,7 @@ def main():
     # Process test
     for data in tqdm(dataloader_test, desc="Processing Test"):
         video_id = data["video_id"]
-        if get_video_belongs_to_split(video_id) != args.split:
+        if get_video_belongs_to_split(video_id) != split:
             continue
         try:
             generator.generate_video_world_bb_annotations(
@@ -648,9 +654,14 @@ def main():
 
 def main_sample():
     args = parse_args()
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+
     generator = FrameToWorldAnnotations(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
     )
     video_id = "00T1E.mp4"
     generator.generate_video_world_bb_annotations(

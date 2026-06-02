@@ -17,6 +17,9 @@ from tqdm import tqdm
 
 from dataloader.ag_dataset import StandardAG
 from datasets.preprocess.human.prompt_hmr.vis.traj import align_meshes_to_ground
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
 from datasets.preprocess.annotations.raw.bb3D_base import BBox3DBase
 from datasets.preprocess.annotations.annotation_utils import (
     _load_pkl_if_exists,
@@ -445,29 +448,30 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Visualize static + per-frame 3D points with Rerun (AG-Pi3 unified)."
     )
+    add_config_arg(parser)
     # Paths
     parser.add_argument(
         "--ag_root_directory",
         type=str,
-        default="/data/rohith/ag",
+        default=None,
         help="Optional: directory containing annotated frames (unused here).",
     )
     parser.add_argument(
         "--static_scene_dir_path",
         type=str,
-        default="/data3/rohith/ag/ag4D/static_scenes/pi3_static",
+        default=None,
         help="Path to output directory where predictions folders live (e.g., <video>_10/).",
     )
     parser.add_argument(
         "--dynamic_scene_dir_path",
         type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
+        default=None,
     )
     # Selection
     parser.add_argument(
         "--split",
         type=_parse_split,
-        default="QT",
+        default=None,
         help="Shard to process: one of {04, 59, AD, EH, IL, MP, QT, UZ}.",
     )
     return parser.parse_args()
@@ -512,12 +516,19 @@ def load_dataset(ag_root_directory: str):
 
 def main() -> None:
     args = parse_args()
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    gen_cfg = config.get("bb3d_generator", {})
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    split = first(args.split, gen_cfg.get("split"), default="QT")
+
     bbox_3d_generator = BBox3DGenerator(
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        ag_root_directory=args.ag_root_directory,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        ag_root_directory=ag_root,
     )
-    train_dataset, test_dataset, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
-    bbox_3d_generator.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=args.split)
+    train_dataset, test_dataset, dataloader_train, dataloader_test = load_dataset(ag_root)
+    bbox_3d_generator.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=split)
 
 
 if __name__ == "__main__":

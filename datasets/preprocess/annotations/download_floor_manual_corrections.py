@@ -96,6 +96,8 @@ from typing import Any, Dict, List, Optional, Set
 # Add parent directory for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from config_utils import load_config, first, add_config_arg
+
 from analysis.FirebaseService import FirebaseService
 
 
@@ -328,6 +330,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Download manual corrections (floor, XY alignment, final alignment) from Firebase"
     )
+    add_config_arg(parser)
     parser.add_argument(
         "--video",
         type=str,
@@ -343,7 +346,7 @@ def main():
         "--output-dir",
         type=str,
         default=None,
-        help="Output directory for PKL files (default: /data/rohith/ag/world_annotations/manual_corrections)"
+        help="Output directory for PKL files (overrides config)"
     )
     parser.add_argument(
         "--overwrite",
@@ -352,7 +355,15 @@ def main():
     )
     args = parser.parse_args()
 
-    downloader = ManualCorrectionDownloader(output_dir=args.output_dir)
+    # Load config and resolve output dir: CLI > config > default
+    config = load_config(args.config)
+    output_dir = first(
+        args.output_dir,
+        config.get("manual_corrections", {}).get("output_dir"),
+        default="/data/rohith/ag/world_annotations/manual_corrections",
+    )
+
+    downloader = ManualCorrectionDownloader(output_dir=output_dir)
 
     if args.list:
         downloader.list_corrected_videos()

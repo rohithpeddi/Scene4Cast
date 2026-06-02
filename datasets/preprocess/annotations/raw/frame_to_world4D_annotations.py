@@ -119,6 +119,9 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
 from datasets.preprocess.annotations.annotation_utils import (
     _faces_u32,
 )
@@ -1959,16 +1962,13 @@ def parse_args():
             "enforces object permanence, and computes static unions."
         )
     )
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
     parser.add_argument(
-        "--dynamic_scene_dir_path",
-        type=str,
-        default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
+        "--dynamic_scene_dir_path", type=str, default=None,
     )
     parser.add_argument(
-        "--split",
-        type=str,
-        default=None,
+        "--split", type=str, default=None,
         help=(
             "Process only videos belonging to this split. "
             "Valid splits: 04, 59, AD, EH, IL, MP, QT, UZ. "
@@ -1976,26 +1976,19 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--video",
-        type=str,
-        default=None,
+        "--video", type=str, default=None,
         help="Process a single video (e.g., '00T1E.mp4').",
     )
     parser.add_argument(
-        "--overwrite",
-        action="store_true",
+        "--overwrite", action="store_true",
         help="Overwrite existing 4D annotation files.",
     )
     parser.add_argument(
-        "--phase",
-        type=str,
-        default=None,
-        choices=["train", "test"],
-        help="Dataset phase. Routes outputs to world_annotations/<phase>/...",
+        "--phase", type=str, default=None, choices=["train", "test"],
+        help="Dataset phase. Overrides config if provided.",
     )
     parser.add_argument(
-        "--visualize",
-        action="store_true",
+        "--visualize", action="store_true",
         help="Launch rerun visualization for each video (slow).",
     )
     return parser.parse_args()
@@ -2008,10 +2001,14 @@ def main():
 
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    ag_root, dynamic_scene_dir, phase = resolve_common(args, config)
+
     generator = FrameToWorldAnnotations(
-        ag_root_directory=args.ag_root_directory,
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        phase=args.phase,
+        ag_root_directory=ag_root,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        phase=phase,
     )
 
     # ------------------------------------------------------------------

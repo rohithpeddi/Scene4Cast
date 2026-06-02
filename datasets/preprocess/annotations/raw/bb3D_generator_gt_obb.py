@@ -22,6 +22,10 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(__file__) + '/..')
 
+from datasets.preprocess.annotations.config_utils import (
+    load_config, resolve_common, first, add_config_arg,
+)
+
 # from AG / human pipeline codebase
 from dataloader.ag_dataset import StandardAG
 
@@ -878,13 +882,14 @@ def load_dataset(ag_root_directory: str):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ag_root_directory", type=str, default="/data/rohith/ag")
-    parser.add_argument("--dynamic_scene_dir_path", type=str, default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic")
-    parser.add_argument("--output_human_dir_path", type=str, default="/data/rohith/ag/ag4D/human/")
+    add_config_arg(parser)
+    parser.add_argument("--ag_root_directory", type=str, default=None)
+    parser.add_argument("--dynamic_scene_dir_path", type=str, default=None)
+    parser.add_argument("--output_human_dir_path", type=str, default=None)
     parser.add_argument("--visualize", action="store_true")
-    parser.add_argument("--split", type=str, default="04")
+    parser.add_argument("--split", type=str, default=None)
     parser.add_argument("--phase", type=str, default=None, choices=["train", "test"],
-                        help="Dataset phase. Routes outputs to world_annotations/<phase>/...")
+                        help="Dataset phase. Overrides config if provided.")
     parser.add_argument("--video", type=str, default=None, help="Process a single video")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing PKL files")
     args = parser.parse_args()
@@ -893,34 +898,49 @@ def parse_args():
 
 def main_sample():
     args = parse_args()
+
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    bb3d_cfg = config.get("bb3d_generator_gt_obb", {})
+    ag_root, dynamic_scene_dir, _ = resolve_common(args, config)
+    output_human_dir = first(args.output_human_dir_path, bb3d_cfg.get("output_human_dir_path"),
+                             default="/data/rohith/ag/ag4D/human/")
+
     video_id = "05124.mp4"
     gen = BBox3DGeneratorOBB(
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        ag_root_directory=args.ag_root_directory,
-        output_human_dir_path=args.output_human_dir_path
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        ag_root_directory=ag_root,
+        output_human_dir_path=output_human_dir
     )
 
-    # gen.generate_sample_gt_world_bb_annotations(video_id)
     gen.visualize_obb_from_saved_files(
         video_id=video_id,
         vis_floor=True,
-        vis_humans=False,   # set True only if you also load vertices_orig into world4d
+        vis_humans=False,
         img_maxsize=480,
     )
 
 def main():
     args = parse_args()
 
+    # Load config and resolve CLI > config > default
+    config = load_config(args.config)
+    bb3d_cfg = config.get("bb3d_generator_gt_obb", {})
+    ag_root, dynamic_scene_dir, phase = resolve_common(args, config)
+    output_human_dir = first(args.output_human_dir_path, bb3d_cfg.get("output_human_dir_path"),
+                             default="/data/rohith/ag/ag4D/human/")
+    split = first(args.split, bb3d_cfg.get("split"), default="04")
+
     bbox_3d_generator_obb = BBox3DGeneratorOBB(
-        dynamic_scene_dir_path=args.dynamic_scene_dir_path,
-        ag_root_directory=args.ag_root_directory,
-        output_human_dir_path=args.output_human_dir_path,
-        phase=args.phase,
+        dynamic_scene_dir_path=dynamic_scene_dir,
+        ag_root_directory=ag_root,
+        output_human_dir_path=output_human_dir,
+        phase=phase,
     )
 
-    train_dataset, test_dataset, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
-    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=args.split, overwrite=args.overwrite)
-    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_test, split=args.split, overwrite=args.overwrite)
+    train_dataset, test_dataset, dataloader_train, dataloader_test = load_dataset(ag_root)
+    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=split, overwrite=args.overwrite)
+    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_test, split=split, overwrite=args.overwrite)
 
 
 if __name__ == "__main__":
