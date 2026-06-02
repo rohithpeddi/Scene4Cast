@@ -8,8 +8,9 @@ box annotations into a unified per-video PKL file.
 Inputs:
   - ``<ag_root>/world_rel_annotations/<phase>/<video>.pkl``
     (from ``augment_relationships_train.py``)
-  - ``<ag_root>/world_annotations/bbox_annotations_4d/<video>.pkl``
-    (from ``frame_to_world4D_annotations.py``)
+  - ``<ag_root>/world_annotations/<phase>/bbox_annotations_4d_corrected/<video>.pkl``
+    (from ``corrected_4d_bbox_generator.py`` — manually-corrected-floor 4D boxes;
+    NOT the stale raw ``bbox_annotations_4d``.)
 
 Output:
   - ``<ag_root>/world4d_rel_annotations/<phase>/<video>.pkl``
@@ -566,7 +567,11 @@ def main():
     ag_root = Path(ag_root_dir)
 
     rel_dir = ag_root / "world_rel_annotations" / args.phase
-    w4d_dir = ag_root / "world_annotations" / "bbox_annotations_4d"
+    # Corrected-floor 4D bboxes (phase-separated), produced by
+    # corrected_4d_bbox_generator.py. Previously this read the flat raw
+    # ``bbox_annotations_4d`` (auto floor); switched to the corrected dir so the
+    # manual floor corrections actually flow into the train scene graph.
+    w4d_dir = ag_root / "world_annotations" / args.phase / "bbox_annotations_4d_corrected"
     output_dir = ag_root / "world4d_rel_annotations" / args.phase
     output_dir.mkdir(parents=True, exist_ok=True)
 
