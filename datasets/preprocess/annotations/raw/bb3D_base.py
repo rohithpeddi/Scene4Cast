@@ -43,9 +43,11 @@ class BBox3DBase:
         self,
         dynamic_scene_dir_path: Optional[str] = None,
         ag_root_directory: Optional[str] = None,
+        phase: Optional[str] = None,
     ) -> None:
         self.ag_root_directory = Path(ag_root_directory)
         self.dynamic_scene_dir_path = Path(dynamic_scene_dir_path)
+        self.phase = phase
 
         self.dataset_classnames = [
             '__background__', 'person', 'bag', 'bed', 'blanket', 'book', 'box', 'broom', 'chair',
@@ -69,13 +71,19 @@ class BBox3DBase:
         self.sampled_frames_idx_root_dir = self.ag_root_directory / "sampled_frames_idx"
 
         self.world_annotations_root_dir = self.ag_root_directory / "world_annotations"
-        self.bbox_3d_root_dir = self.world_annotations_root_dir / "bbox_annotations_3d"
-        self.bbox_3d_obb_root_dir = self.world_annotations_root_dir / "bbox_annotations_3d_obb"
 
+        # Phase-separated output directories
+        if phase:
+            phase_dir = self.world_annotations_root_dir / phase
+        else:
+            phase_dir = self.world_annotations_root_dir
 
-        self.bbox_4d_root_dir = self.world_annotations_root_dir / "bbox_annotations_4d"
-        self.bbox_3d_final_root_dir = self.world_annotations_root_dir / "bbox_annotations_3d_final"
-        self.bbox_3d_camera_root_dir = self.world_annotations_root_dir / "bbox_annotations_3d_camera"
+        self.bbox_3d_root_dir = phase_dir / "bbox_annotations_3d"
+        self.bbox_3d_obb_root_dir = phase_dir / "bbox_annotations_3d_obb"
+
+        self.bbox_4d_root_dir = phase_dir / "bbox_annotations_4d"
+        self.bbox_3d_final_root_dir = phase_dir / "bbox_annotations_3d_final"
+        self.bbox_3d_camera_root_dir = phase_dir / "bbox_annotations_3d_camera"
 
         os.makedirs(self.bbox_3d_root_dir, exist_ok=True)
         os.makedirs(self.bbox_3d_obb_root_dir, exist_ok=True)

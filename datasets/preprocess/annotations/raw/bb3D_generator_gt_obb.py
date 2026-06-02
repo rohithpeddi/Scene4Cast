@@ -563,7 +563,7 @@ class BBox3DGeneratorOBB(BBox3DGenerator):
             min_conf_default=min_conf_default,
         )
 
-    def generate_gt_world_bb_annotations(self, dataloader, split) -> None:
+    def generate_gt_world_bb_annotations(self, dataloader, split, *, overwrite: bool = False) -> None:
         for data in tqdm(dataloader):
             video_id = data['video_id']
             if get_video_belongs_to_split(video_id) == split:
@@ -578,7 +578,8 @@ class BBox3DGeneratorOBB(BBox3DGenerator):
                         video_id=video_id,
                         video_gt_annotations=full_gt,
                         video_gdino_predictions=gdino,
-                        visualize=False
+                        visualize=False,
+                        overwrite=overwrite,
                     )
 
                 except Exception as e:
@@ -882,6 +883,10 @@ def parse_args():
     parser.add_argument("--output_human_dir_path", type=str, default="/data/rohith/ag/ag4D/human/")
     parser.add_argument("--visualize", action="store_true")
     parser.add_argument("--split", type=str, default="04")
+    parser.add_argument("--phase", type=str, default=None, choices=["train", "test"],
+                        help="Dataset phase. Routes outputs to world_annotations/<phase>/...")
+    parser.add_argument("--video", type=str, default=None, help="Process a single video")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing PKL files")
     args = parser.parse_args()
     return args
 
@@ -909,12 +914,13 @@ def main():
     bbox_3d_generator_obb = BBox3DGeneratorOBB(
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
         ag_root_directory=args.ag_root_directory,
-        output_human_dir_path=args.output_human_dir_path
+        output_human_dir_path=args.output_human_dir_path,
+        phase=args.phase,
     )
 
     train_dataset, test_dataset, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
-    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=args.split)
-    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_test, split=args.split)
+    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_train, split=args.split, overwrite=args.overwrite)
+    bbox_3d_generator_obb.generate_gt_world_bb_annotations(dataloader=dataloader_test, split=args.split, overwrite=args.overwrite)
 
 
 if __name__ == "__main__":

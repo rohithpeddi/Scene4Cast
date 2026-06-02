@@ -173,10 +173,14 @@ class FrameToWorldAnnotationsOBB(FrameToWorldAnnotationsBase):
     Oriented Bounding Boxes (OBB) instead of AABB.
     """
     
-    def __init__(self, ag_root_directory: str, dynamic_scene_dir_path: str):
-        super().__init__(ag_root_directory, dynamic_scene_dir_path)
-        # Create a separate directory for OBB camera annotations
-        self.bbox_3d_obb_camera_root_dir = self.world_annotations_root_dir / "bbox_annotations_3d_obb_camera"
+    def __init__(self, ag_root_directory: str, dynamic_scene_dir_path: str, phase: Optional[str] = None):
+        super().__init__(ag_root_directory, dynamic_scene_dir_path, phase=phase)
+        # Create a separate directory for OBB camera annotations (phase-aware)
+        if phase:
+            phase_dir = self.world_annotations_root_dir / phase
+        else:
+            phase_dir = self.world_annotations_root_dir
+        self.bbox_3d_obb_camera_root_dir = phase_dir / "bbox_annotations_3d_obb_camera"
         import os
         os.makedirs(self.bbox_3d_obb_camera_root_dir, exist_ok=True)
 
@@ -482,6 +486,10 @@ def parse_args():
         default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
     )
     parser.add_argument("--split", type=str, default="04")
+    parser.add_argument("--phase", type=str, default=None, choices=["train", "test"],
+                        help="Dataset phase. Routes outputs to world_annotations/<phase>/...")
+    parser.add_argument("--video", type=str, default=None, help="Process a single video")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing PKL files")
     return parser.parse_args()
 
 
@@ -491,11 +499,12 @@ def main():
     frame_to_world_generator = FrameToWorldAnnotationsOBB(
         ag_root_directory=args.ag_root_directory,
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        phase=args.phase,
     )
     _, _, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
 
-    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_train, split=args.split)
-    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_test, split=args.split)
+    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_train, split=args.split, overwrite=args.overwrite)
+    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_test, split=args.split, overwrite=args.overwrite)
 
 
 def main_sample():

@@ -277,6 +277,10 @@ def parse_args():
         default="/data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic",
     )
     parser.add_argument("--split", type=str, default="04")
+    parser.add_argument("--phase", type=str, default=None, choices=["train", "test"],
+                        help="Dataset phase. Routes outputs to world_annotations/<phase>/...")
+    parser.add_argument("--video", type=str, default=None, help="Process a single video")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing PKL files")
     return parser.parse_args()
 
 
@@ -286,11 +290,12 @@ def main():
     frame_to_world_generator = FrameToWorldOBBAnnotations(
         ag_root_directory=args.ag_root_directory,
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        phase=args.phase,
     )
     _, _, dataloader_train, dataloader_test = load_dataset(args.ag_root_directory)
 
-    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_train, split=args.split)
-    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_test, split=args.split)
+    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_train, split=args.split, overwrite=args.overwrite)
+    frame_to_world_generator.generate_gt_world_3D_bb_annotations(dataloader=dataloader_test, split=args.split, overwrite=args.overwrite)
 
 
 def main_sample():

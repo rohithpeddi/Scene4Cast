@@ -302,8 +302,8 @@ def compute_final_world_transform(
 
 class FrameToWorldAnnotations(FrameToWorldBase):
 
-    def __init__(self, ag_root_directory: str, dynamic_scene_dir_path: str):
-        super().__init__(ag_root_directory, dynamic_scene_dir_path)
+    def __init__(self, ag_root_directory: str, dynamic_scene_dir_path: str, phase: Optional[str] = None):
+        super().__init__(ag_root_directory, dynamic_scene_dir_path, phase=phase)
 
     # ----------------------------------------------------------------------------------
     # World 4D bbox annotations (skeleton) + ORIGINAL-results visualization
@@ -1987,6 +1987,13 @@ def parse_args():
         help="Overwrite existing 4D annotation files.",
     )
     parser.add_argument(
+        "--phase",
+        type=str,
+        default=None,
+        choices=["train", "test"],
+        help="Dataset phase. Routes outputs to world_annotations/<phase>/...",
+    )
+    parser.add_argument(
         "--visualize",
         action="store_true",
         help="Launch rerun visualization for each video (slow).",
@@ -2004,6 +2011,7 @@ def main():
     generator = FrameToWorldAnnotations(
         ag_root_directory=args.ag_root_directory,
         dynamic_scene_dir_path=args.dynamic_scene_dir_path,
+        phase=args.phase,
     )
 
     # ------------------------------------------------------------------

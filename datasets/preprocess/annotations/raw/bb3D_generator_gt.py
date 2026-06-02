@@ -65,8 +65,9 @@ class BBox3DGenerator(BBox3DBase):
             dynamic_scene_dir_path: Optional[str] = None,
             ag_root_directory: Optional[str] = None,
             output_human_dir_path: Optional[str] = None,
+            phase: Optional[str] = None,
     ) -> None:
-        super().__init__(dynamic_scene_dir_path, ag_root_directory)
+        super().__init__(dynamic_scene_dir_path, ag_root_directory, phase=phase)
 
         self.pipeline = AgPipeline(static_cam=False, dynamic_scene_dir_path=self.dynamic_scene_dir_path)
         self.smplx = SMPLX_Layer(SMPLX_PATH).cuda()
@@ -488,13 +489,14 @@ class BBox3DGenerator(BBox3DBase):
             visualize: bool = False,
             use_consistent_transformation: bool = False,
             label_colors: Optional[Dict[str, List[int]]] = None,  # NEW
+            overwrite: bool = False,
     ) -> None:
         # load dynamic points (annotated frames)
         try:
             # out_path = self.bbox_3d_root_dir / f"{video_id[:-4]}.pkl"
             out_path = self.bbox_3d_obb_root_dir / f"{video_id[:-4]}.pkl"
-            if out_path.exists():
-                print(f"[bbox] floor-aligned 3D bboxes already exist for video {video_id}, skipping...")
+            if out_path.exists() and not overwrite:
+                print(f"[bbox] floor-aligned 3D bboxes already exist for video {video_id}, skipping (use --overwrite)...")
                 return
             P = self._load_points_for_video(video_id)
             points_S = P["points"]  # (S,H,W,3)
