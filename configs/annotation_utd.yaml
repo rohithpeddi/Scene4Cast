@@ -1,0 +1,236 @@
+# =============================================================================
+# Unified Test Dataset Annotation Configuration
+# =============================================================================
+# Centralized configuration for generating all annotations on the TEST dataset
+# using manually corrected floor transforms from Firebase.
+#
+# Pipeline stages:
+#   1. Download manual corrections (floor transform) from Firebase
+#   2. Generate world-frame 3D bboxes using corrected transforms
+#   3. Generate frame-level 3D bboxes (FINAL and CAMERA coords)
+#   4. Generate 4D bboxes with object permanence filling
+#   5. Augment relationships with human corrections
+#   6. Merge relationships with 4D bboxes
+#   7. Generate final unified scene graphs
+#
+# =============================================================================
+
+# --- Root Paths ---
+ag_root_directory: /data/rohith/ag
+dynamic_scene_dir_path: /data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic
+
+# --- Dataset Phase ---
+phase: "test"  # Options: "train" or "test"
+
+# --- Manual Corrections (Firebase) ---
+manual_corrections:
+  # Download corrections from Firebase and save locally
+  output_dir: "/data/rohith/ag/world_annotations/manual_corrections"
+  overwrite: false  # Set to true to re-download existing corrections
+
+  # Firebase paths (used by download_floor_manual_corrections.py)
+  firebase_floor_corrections_path: "worldframe_obb/floor_corrections"
+  firebase_xy_alignments_path: "worldframe_obb/xy_alignments"
+  firebase_final_alignments_path: "worldframe_obb/final_alignments"
+
+# --- Step 1: World BBox Generation (using corrected floor transforms) ---
+corrected_world_bbox:
+  input_dir: "/data/rohith/ag/world_annotations/manual_corrections"
+  output_dir: "/data/rohith/ag/world_annotations/test/bbox_annotations_3d_obb_corrected"
+  overwrite: false
+  # Reads from:
+  #   - manual_corrections/<video>.pkl (corrected transforms)
+  #   - world_annotations/bbox_annotations_3d_obb/<video>.pkl (original bboxes)
+  # Writes to:
+  #   - bbox_annotations_3d_obb_corrected/<video>.pkl
+
+# --- Step 2: Frame BBox Generation (FINAL and CAMERA coords) ---
+corrected_frame_bbox:
+  # Input: corrected world bboxes
+  input_dir: "/data/rohith/ag/world_annotations/test/bbox_annotations_3d_obb_corrected"
+
+  # Outputs
+  output_dir_final: "/data/rohith/ag/world_annotations/test/bbox_annotations_3d_obb_corrected_final"
+  output_dir_camera: "/data/rohith/ag/world_annotations/test/bbox_annotations_3d_obb_corrected_camera"
+
+  overwrite: false
+  modes: ["final", "camera"]  # Options: "final", "camera", or ["final", "camera"]
+  # Writes to:
+  #   - bbox_annotations_3d_obb_corrected_final/<video>.pkl
+  #   - bbox_annotations_3d_obb_corrected_camera/<video>.pkl
+
+# --- Step 3: 4D BBox Generation (object permanence filling) ---
+corrected_4d_bbox:
+  input_dir: "/data/rohith/ag/world_annotations/test/bbox_annotations_3d_obb_corrected"
+  output_dir: "/data/rohith/ag/world_annotations/test/bbox_annotations_4d_corrected"
+  overwrite: false
+  # Reads from:
+  #   - bbox_annotations_3d_obb_corrected/<video>.pkl
+  # Writes to:
+  #   - bbox_annotations_4d_corrected/<video>.pkl
+
+# --- Step 4: Relationship Augmentation ---
+augment_relationships:
+  # Merge GT relationships with human-corrected annotations
+  ag_root_directory: /data/rohith/ag
+  corrections_dir: "/data/rohith/ag/world_annotations/manual_corrections"
+  output_dir: "/data/rohith/ag/wsg_2d_augmentations"
+  overwrite: false
+
+  # Test-specific: reads from augmentation PKLs
+  # Writes to:
+  #   - wsg_2d_augmentations/<video>.pkl
+
+# --- Step 5: Combine Relationships with 4D BBoxes ---
+combine_world4d_relationships:
+  # Merge augmented relationships with corrected 4D bboxes
+  ag_root_directory: /data/rohith/ag
+
+  # Inputs
+  augmented_relationships_dir: "/data/rohith/ag/wsg_2d_augmentations"
+  corrected_4d_bbox_dir: "/data/rohith/ag/world_annotations/test/bbox_annotations_4d_corrected"
+
+  # Output
+  output_dir: "/data/rohith/ag/world4d_rel_annotations/test"
+  overwrite: false
+
+  # Writes to:
+  #   - world4d_rel_annotations/test/<video>.pkl
+
+# --- Step 6: World Scene Graph Generation ---
+world_scene_graph:
+  ag_root_directory: /data/rohith/ag
+
+  # Inputs
+  augmented_relationships_dir: "/data/rohith/ag/wsg_2d_augmentations"
+  corrected_4d_bbox_dir: "/data/rohith/ag/world_annotations/test/bbox_annotations_4d_corrected"
+
+  # Output
+  output_dir: "/data/rohith/ag/world_scene_graph"
+  overwrite: false
+
+  # Writes to:
+  #   - world_scene_graph/<video>.pkl
+
+# --- Filtering and Processing Options ---
+processing:
+  # Only process videos that have corrected annotations in Firebase
+  corrections_only: true
+
+  # Filter by split (e.g., "04", "59", "AD", etc.) — null to process all
+  split: null
+
+  # Process single video (null for all)
+  video: null
+
+  # Parallel processing options
+  num_workers: 4
+  verbose: true
+
+# --- Data Types and Precision ---
+data_types:
+  points_dtype: "float32"
+  bbox_dtype: "float32"
+  camera_poses_dtype: "float32"
+
+# --- Visualization (optional) ---
+visualization:
+  enabled: false
+  rerun_app_id: "WorldSGG-Annotations"
+  save_visualizations: false
+
+# =============================================================================
+# RAW ANNOTATION GENERATION (for full re-generation from scratch)
+# =============================================================================
+# These sections are used when generating baseline annotations from raw data.
+# This is a separate workflow from the corrected pipeline above.
+#
+# NOTE on precedence: every script resolves the common settings
+#   ag_root_directory / dynamic_scene_dir_path / phase
+# from the TOP-LEVEL keys above (via config_utils.resolve_common), following
+# CLI > config > built-in default. The per-section keys below only hold
+# script-specific values (split, output dirs, thresholds, etc.).
+#
+# Order of execution (if regenerating from scratch):
+#   1. gt_generator
+#   2. bb3D_generator_gt_obb
+#   3. frame_to_world4D_annotations
+#   4. bb3D_bridge_generator_obb (optional - for GDino detections)
+#   5. frame_bbox_3D_gt_obb
+# =============================================================================
+
+# --- Ground Truth Generation ---
+gt_generator:
+  output_dir: "/data/rohith/ag/ag4D/gt_annotations/"
+
+# --- 3D BBox Generation (GT, AABB+OBB legacy) ---
+bb3d_generator:
+  split: "QT"
+
+# --- 3D BBox Generation (GT, human-mesh aligned) ---
+bb3d_generator_gt:
+  output_human_dir_path: "/data/rohith/ag/ag4D/human/"
+  split: "04"
+
+# --- 3D BBox Generation (GT, find-no-floor variant) ---
+bb3d_generator_fnf:
+  output_human_dir_path: "/data/rohith/ag/ag4D/human/"
+  split: "04"
+
+# --- 3D BBox Generation (GT OBB) ---
+bb3d_generator_gt_obb:
+  output_human_dir_path: "/data/rohith/ag/ag4D/human/"
+  split: "04"
+
+# --- 4D BBox Generation (GT) ---
+frame_to_world4d_annotations: {}  # uses only the common top-level settings
+
+# --- 3D BBox Bridge Generation (GDino detections) ---
+bb3d_bridge_generator_obb:
+  split: "04"
+  gdino_score_thr: 0.3
+
+# --- Frame-level 3D BBox Generation (GT OBB) ---
+frame_bbox_3d_gt_obb:
+  split: "04"
+
+# --- Frame-level 3D BBox Generation (GT, AABB) ---
+frame_bbox_3d_gt:
+  split: "04"
+
+# --- Frame-level 3D BBox Generation (GT, camera frame) ---
+frame_bbox_3d_gt_cam:
+  split: "04"
+
+# --- Frame-level 3D BBox Generation (GT OBB, camera frame) ---
+frame_bbox_3d_gt_cam_obb:
+  split: "04"
+
+# --- Frame-level 3D BBox Generation (GT, scaled) ---
+frame_bbox_3d_gt_scaled:
+  split: "04"
+
+# --- Visualization tools ---
+frame_bbox_correction_vis:
+  split: "04"
+
+frame_to_world4d_vis:
+  split: "04"
+
+# =============================================================================
+# ADHOC TOOLS (one-off utilities and statistics)
+# =============================================================================
+
+attach_intrinsics:
+  human_dir: "/data2/rohith/ag/ag4D/human"
+
+frame_bbox_3d_obb_from_gt:
+  split: "04"
+
+frame_to_world_stats:
+  split: "04"
+
+frame_to_world_label_stats: {}  # uses only the common top-level settings
+
+slim_annotations:
+  input_dir: "bbox_annotations_3d_obb_camera_intrinsics"

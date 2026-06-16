@@ -1,1 +1,0 @@
-from .smpl_wrapper import SMPL, SMPLX
