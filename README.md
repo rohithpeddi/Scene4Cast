@@ -32,6 +32,8 @@
 
 ## 📢 News & Updates
 
+- **[Jun 2026]** — Final ActionGenome4D annotations and trained model checkpoints will be released in the coming weeks alongside an updated paper.
+- **[Jun 2026]** — Released the [3D BBox Annotation Tool](https://github.com/rohithpeddi/3DBBoxAnnotationTool) and the [MLLM Pipeline](https://github.com/rohithpeddi/WorldSceneGraphAnnotationTool) used for constructing ActionGenome4D annotations.
 - **[May 2026]** — ActionGenome4D annotations, trained checkpoints, and VLM evaluation code available upon request by email to [rohith.peddi@utdallas.edu](mailto:rohith.peddi@utdallas.edu)
 - **[Mar 2026]** — Released the [arXiv paper](https://arxiv.org/abs/2603.13185) describing the WorldSGG framework.
 
@@ -140,7 +142,39 @@ The **manual 3D annotation correction** tool provides a 3D annotation interface 
 
 ---
 
-### 6. WorldWise: WSGG Model Architecture
+### 6. Annotation Tools
+
+The following open-source tools were developed for constructing the ActionGenome4D annotations:
+
+| Tool | Description |
+|:---|:---|
+| [3D BBox Annotation Tool](https://github.com/rohithpeddi/3DBBoxAnnotationTool) | Interactive 3D bounding-box annotation and correction interface for point-cloud scenes |
+| [MLLM Pipeline](https://github.com/rohithpeddi/WorldSceneGraphAnnotationTool) | Multi-modal LLM pipeline for automated relationship annotation and human-in-the-loop correction |
+
+#### 3D BBox Pipeline — Demo Videos
+
+<table>
+  <tr>
+    <td align="center"><strong>FrameBBox Annotation</strong></td>
+    <td align="center"><strong>WorldBBox Annotation</strong></td>
+    <td align="center"><strong>End-to-End Pipeline</strong></td>
+  </tr>
+  <tr>
+    <td align="center">
+      <video src="https://github.com/user-attachments/assets/59bdc49a-020b-45be-acca-efd16719ef14" width="300"></video>
+    </td>
+    <td align="center">
+      <video src="https://github.com/user-attachments/assets/02e10804-5fe6-483e-a969-489eac1d80b0" width="300"></video>
+    </td>
+    <td align="center">
+      <video src="https://github.com/user-attachments/assets/c35c9752-9eca-4eac-93dc-5cd92518f8b4" width="300"></video>
+    </td>
+  </tr>
+</table>
+
+---
+
+### 7. WorldWise: WSGG Model Architecture
 
 <p align="center">
   <img src="analysis/assets/WorldWise.png" width="100%" alt="WorldWise Architecture">
@@ -150,7 +184,7 @@ The **WorldWise** architecture operates in two stages: **Stage 1** performs mono
 
 ---
 
-### 7. WorldRAG: MLLM Evaluation Pipeline
+### 8. WorldRAG: MLLM Evaluation Pipeline
 
 <p align="center">
   <img src="analysis/assets/UWorldSGGGraphRAG.png" width="100%" alt="WorldRAG MLLM Evaluation Pipeline">
