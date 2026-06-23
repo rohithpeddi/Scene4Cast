@@ -353,9 +353,22 @@ class TrainWSGGBase(WSGGBase):
     # ------------------------------------------------------------------
     # Orchestration
     # ------------------------------------------------------------------
+    def _set_seed(self, seed: int):
+        """Seed all RNGs for single-seed reproducibility."""
+        import random
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        logger.info(f"  Seed: {seed}")
+
     def init_method_training(self):
         """Full initialization → training pipeline."""
-        # 0. Config
+        # 0. Reproducibility (single fixed seed per run)
+        self._set_seed(int(getattr(self._conf, 'seed', 0)))
+
+        # 0b. Config
         self._init_config()
 
         # 1. Dataset

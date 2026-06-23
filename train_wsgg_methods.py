@@ -12,12 +12,12 @@ Per-method training classes. Each overrides:
 The dataset returns a single dict with (T, N_max, ...) and (T, K_max, ...)
 pre-padded tensors per video. No per-frame loops needed.
 
-Methods:
-  - w_sttran      : W-STTran      (world-adapted STTran, simplest baseline)
-  - w_sttran_pp   : W-STTran++    (+ camera, motion, temporal edge attention)
-  - w_dsgdetr     : W-DSGDetr     (+ temporal object encoder)
-  - w_dsgdetr_pp  : W-DSGDetr++   (+ camera, motion, ego-motion)
-  - worldwise     : WorldWise     (MWAE-based full proposed method)
+Methods form a strict nested capability ladder (each a superset of the prior):
+  - w_sttran      : W-STTran      GSE + spatial transformer + temporal-edge attn
+  - w_sttran_pp   : W-STTran++    + ObjectSpatialEncoder
+  - w_dsgdetr     : W-DSGDetr     + TemporalObjectEncoder
+  - w_dsgdetr_pp  : W-DSGDetr++   + ObjectMotionEncoder
+  - worldwise     : WorldWise     + ego-motion + MWAE + tail-aware logit adjustment
 
 Usage:
   python train_wsgg_methods.py --config configs/methods/predcls/worldwise_predcls_dinov2b.yaml
@@ -231,6 +231,11 @@ class TrainWorldWise(TrainWSGGBase):
             p_simulate_unseen=self._conf.p_simulate_unseen,
             label_smoothing=self._conf.label_smoothing_vlm,
             mode=self._conf.mode,
+            # Tail-aware logit adjustment (WorldWise-exclusive)
+            use_logit_adjustment=getattr(self._conf, 'use_logit_adjustment', False),
+            logit_adjustment_tau=getattr(self._conf, 'logit_adjustment_tau', 1.0),
+            predicate_priors_path=getattr(self._conf, 'predicate_priors_path', None),
+            data_path=self._conf.data_path,
         )
 
     def is_temporal(self) -> bool:
@@ -296,12 +301,12 @@ class TrainWorldWise(TrainWSGGBase):
 # ============================================================================
 
 METHOD_MAP = {
-    # Baseline adaptations (FasterRCNN / ResNet50 backbone)
+    # Nested baseline ladder (any backbone via feature_model)
     "w_sttran": TrainWSTTran,
     "w_sttran_pp": TrainWSTTranPP,
     "w_dsgdetr": TrainWDSGDetr,
     "w_dsgdetr_pp": TrainWDSGDetrPP,
-    # WorldWise (Dino backbones — ablation via config flags)
+    # WorldWise (full proposed method — MWAE + tail-aware loss)
     "worldwise": TrainWorldWise,
 }
 

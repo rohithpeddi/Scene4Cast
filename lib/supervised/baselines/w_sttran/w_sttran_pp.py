@@ -1,28 +1,25 @@
 """
-W-STTran++: Enhanced World-adapted STTran (Batched)
-=====================================================
+W-STTran++: World-adapted STTran + Object Spatial Encoder (Batched)
+====================================================================
 
-Full enhancement of W-STTran with all world-aware components:
-  - ObjectSpatialEncoder (per-object spatial position in camera frame)
-  - ObjectMotionEncoder (3D velocity/acceleration in world frame)
-  - TemporalEdgeAttention (temporal relationship reasoning)
+Second tier of the nested method ladder. Adds the ObjectSpatialEncoder
+(per-object spatial position in the camera frame) on top of W-STTran.
+Still no per-object motion encoder and no temporal object encoder — those
+are added by higher tiers.
 
 Pipeline:
   1. vectorized_lks_buffer(visual, vis, valid)       → (T, N, d_roi), (T, N)
   2. GlobalStructuralEncoder(corners)                 → (T, N, d_struct)
   3. ObjectSpatialEncoder(pose, corners, valid)       → (T, N, d_camera)
-  4. ObjectMotionEncoder(vel, acc, cam_R, valid)      → (T, N, d_motion)
-  5. LKSTokenizer(struct, buffer, cam, staleness)     → (T, N, d_model)
-  6. InterObjectTransformer(tokens, corners, valid)   → (T, N, d_model)
-  7. NodePredictor(enriched)                          → (T, N, C)
-  8. batched_form_and_attend(...)                     → (T, K_max, d_rel)
-  9. TemporalEdgeAttention(...)                       → (T, K_max, d_rel)
-  10. batched_predict(...)                             → distributions
+  4. LKSTokenizer(struct, buffer, cam, staleness)     → (T, N, d_model)
+  5. InterObjectTransformer(tokens, corners, valid)   → (T, N, d_model)
+  6. NodePredictor(enriched)                          → (T, N, C)
+  7. batched_form_and_attend(...)                     → (T, K_max, d_rel)
+  8. TemporalEdgeAttention(...)                       → (T, K_max, d_rel)
+  9. batched_predict(...)                             → distributions
 
 Key differences from W-STTran:
   + ObjectSpatialEncoder
-  + ObjectMotionEncoder (fused into tokens via extended tokenizer)
-  + TemporalEdgeAttention
 """
 
 import logging
@@ -41,19 +38,18 @@ from lib.supervised.worldsgg.worldsgg_base import (
     GlobalStructuralEncoder, NodePredictor, RelationshipPredictor,
     SpatialGNN as InterObjectTransformer,
     CameraPoseEncoder as ObjectSpatialEncoder,
-    MotionFeatureEncoder as ObjectMotionEncoder,
     TemporalEdgeAttention,
 )
 
 
 class WSTTranPP(nn.Module):
     """
-    W-STTran++ — Enhanced World-adapted STTran (batched).
+    W-STTran++ — World-adapted STTran + ObjectSpatialEncoder (batched).
 
-    Adds object spatial encoder, object motion encoder, and temporal
-    edge attention over the base W-STTran pipeline. Still no explicit
-    object tracking (no TemporalObjectEncoder), but the TemporalEdgeAttention
-    provides temporal context for relationship prediction.
+    Adds the object spatial encoder (camera-frame position) over the base
+    W-STTran pipeline. Still no per-object motion encoder and no explicit
+    object tracking (no TemporalObjectEncoder); the TemporalEdgeAttention
+    (already present in W-STTran) provides temporal context for relationships.
 
     Args:
         config: Method config namespace.
@@ -85,12 +81,7 @@ class WSTTranPP(nn.Module):
             d_camera=config.d_camera,
         )
 
-        # Module 3: Object Motion Encoder — per-object motion in world frame
-        self.object_motion_encoder = ObjectMotionEncoder(
-            d_motion=getattr(config, 'd_motion', 64),
-        )
-
-        # Module 4: LKS Tokenizer (with camera features)
+        # Module 3: LKS Tokenizer (with camera features)
         self.tokenizer = LKSTokenizer(
             d_struct=config.d_struct,
             d_detector_roi=config.d_detector_roi,
@@ -98,16 +89,7 @@ class WSTTranPP(nn.Module):
             d_camera=config.d_camera,
         )
 
-        # Module 5: Motion fusion projection
-        # Fuses d_model tokens with d_motion features
-        d_motion = getattr(config, 'd_motion', 64)
-        self.motion_fusion = nn.Sequential(
-            nn.Linear(config.d_model + d_motion, config.d_model),
-            nn.LayerNorm(config.d_model),
-            nn.GELU(),
-        )
-
-        # Module 6: Inter-Object Transformer (vanilla transformer encoder across objects)
+        # Module 4: Inter-Object Transformer (vanilla transformer encoder across objects)
         self.inter_object_encoder = InterObjectTransformer(
             d_model=config.d_model,
             n_layers=config.n_gnn_layers,
@@ -199,28 +181,7 @@ class WSTTranPP(nn.Module):
                 valid_mask=valid_mask_seq,
             )
 
-        # ==================== Step 4: Object motion encoding ====================
-        # Compute velocity from consecutive corners
-        motion_feats = self.object_motion_encoder(
-            velocity=None,  # First frame: learnable no-motion embedding
-            valid_mask=valid_mask_seq,
-        )
-        if T > 1:
-            velocity = ObjectMotionEncoder.compute_velocity(
-                corners_seq[1:], corners_seq[:-1],
-            )
-            camera_R = camera_pose_seq[1:, :3, :3] if camera_pose_seq is not None else None
-            motion_from_t1 = self.object_motion_encoder(
-                velocity=velocity,
-                camera_R=camera_R,
-                valid_mask=valid_mask_seq[1:],
-            )
-            motion_feats = torch.cat([
-                motion_feats[:1],  # First frame: no-motion
-                motion_from_t1,
-            ], dim=0)  # (T, N, d_motion)
-
-        # ==================== Step 5: Tokenizer (with camera) ====================
+        # ==================== Step 4: Tokenizer (with camera) ====================
         tokens_all = self.tokenizer(
             geometry_tokens=struct_all,
             buffer_features=buffer_all,
@@ -229,13 +190,7 @@ class WSTTranPP(nn.Module):
             staleness=staleness_all,
         )
 
-        # ==================== Step 6: Fuse motion features ====================
-        tokens_all = self.motion_fusion(
-            torch.cat([tokens_all, motion_feats], dim=-1)
-        )
-        tokens_all = tokens_all * valid_mask_seq.unsqueeze(-1).float()
-
-        # ==================== Step 7: Inter-object transformer ====================
+        # ==================== Step 5: Inter-object transformer ====================
         enriched_all = self.inter_object_encoder(
             tokens=tokens_all,
             corners=corners_seq,

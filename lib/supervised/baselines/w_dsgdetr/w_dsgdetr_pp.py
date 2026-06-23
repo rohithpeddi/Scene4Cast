@@ -1,19 +1,14 @@
 """
-W-DSGDetr++: Enhanced World-adapted DSGDetr (Batched)
-=======================================================
+W-DSGDetr++: World-adapted DSGDetr + Object Motion Encoder (Batched)
+=====================================================================
 
-Full enhancement of W-DSGDetr with all world-aware components:
-  - ObjectSpatialEncoder (per-object spatial position in camera frame)
-  - ObjectMotionEncoder (3D velocity/acceleration in world frame)
-  - CameraTemporalEncoder (ego-motion sequence attention)
-
-Pipeline adds object spatial, object motion, and ego-motion on top of W-DSGDetr's
-TemporalObjectEncoder + TemporalEdgeAttention pipeline.
+Fourth tier of the nested method ladder. Adds the per-object motion encoder
+(3D velocity/acceleration in the world frame) on top of W-DSGDetr. The
+ObjectSpatialEncoder is inherited from W-DSGDetr; the ego-motion
+(CameraTemporalEncoder) and the MWAE remain exclusive to WorldWise.
 
 Key differences from W-DSGDetr:
-  + ObjectSpatialEncoder
-  + ObjectMotionEncoder
-  + CameraTemporalEncoder (full ego-motion temporal context)
+  + ObjectMotionEncoder (fused into tokens)
 """
 
 import logging
@@ -33,7 +28,6 @@ from lib.supervised.worldsgg.worldsgg_base import (
     GlobalStructuralEncoder, NodePredictor, RelationshipPredictor,
     SpatialGNN as InterObjectTransformer,
     CameraPoseEncoder as ObjectSpatialEncoder,
-    CameraTemporalEncoder,
     MotionFeatureEncoder as ObjectMotionEncoder,
     TemporalEdgeAttention,
 )
@@ -41,10 +35,11 @@ from lib.supervised.worldsgg.worldsgg_base import (
 
 class WDSGDetrPP(nn.Module):
     """
-    W-DSGDetr++ — Enhanced World-adapted DSGDetr (batched).
+    W-DSGDetr++ — World-adapted DSGDetr + ObjectMotionEncoder (batched).
 
-    Full enhancement: temporal object encoder + object spatial + object motion
-    + ego-motion + temporal edge attention. The most feature-rich baseline.
+    Strongest baseline tier: temporal object encoder + object spatial encoder
+    + object motion encoder + temporal edge attention. No ego-motion and no
+    MWAE — those are exclusive to WorldWise.
 
     Args:
         config: Method config namespace.
@@ -76,18 +71,13 @@ class WDSGDetrPP(nn.Module):
             d_camera=config.d_camera,
         )
 
-        # Module 3: Camera Temporal Encoder — ego-motion in world frame
-        self.camera_temporal_encoder = CameraTemporalEncoder(
-            d_camera=config.d_camera,
-        )
-
-        # Module 4: Object Motion Encoder — per-object motion in world frame
+        # Module 3: Object Motion Encoder — per-object motion in world frame
         d_motion = getattr(config, 'd_motion', 64)
         self.object_motion_encoder = ObjectMotionEncoder(
             d_motion=d_motion,
         )
 
-        # Module 5: LKS Tokenizer (with camera)
+        # Module 4: LKS Tokenizer (with camera)
         self.tokenizer = LKSTokenizer(
             d_struct=config.d_struct,
             d_detector_roi=config.d_detector_roi,
@@ -95,14 +85,14 @@ class WDSGDetrPP(nn.Module):
             d_camera=config.d_camera,
         )
 
-        # Module 6: Motion + ego-motion fusion
+        # Module 5: Motion fusion (no ego-motion — exclusive to WorldWise)
         self.motion_fusion = nn.Sequential(
-            nn.Linear(config.d_model + d_motion + config.d_camera, config.d_model),
+            nn.Linear(config.d_model + d_motion, config.d_model),
             nn.LayerNorm(config.d_model),
             nn.GELU(),
         )
 
-        # Module 7: Temporal Object Encoder
+        # Module 6: Temporal Object Encoder
         self.temporal_obj_encoder = TemporalObjectEncoder(
             d_model=config.d_model,
             n_heads=config.n_heads,
@@ -203,12 +193,7 @@ class WDSGDetrPP(nn.Module):
                 valid_mask=valid_mask_seq,
             )
 
-        # ==================== Step 4: Ego-motion encoding ====================
-        ego_tokens = None
-        if camera_pose_seq is not None:
-            ego_tokens = self.camera_temporal_encoder(camera_pose_seq)  # (T, d_camera)
-
-        # ==================== Step 5: Object motion encoding ====================
+        # ==================== Step 4: Object motion encoding ====================
         motion_feats = self.object_motion_encoder(
             velocity=None,
             valid_mask=valid_mask_seq,
@@ -225,7 +210,7 @@ class WDSGDetrPP(nn.Module):
             )
             motion_feats = torch.cat([motion_feats[:1], motion_from_t1], dim=0)
 
-        # ==================== Step 6: Tokenizer (with camera) ====================
+        # ==================== Step 5: Tokenizer (with camera) ====================
         tokens_all = self.tokenizer(
             geometry_tokens=struct_all,
             buffer_features=buffer_all,
@@ -234,19 +219,13 @@ class WDSGDetrPP(nn.Module):
             staleness=staleness_all,
         )
 
-        # ==================== Step 7: Fuse motion + ego-motion ====================
-        N = tokens_all.shape[1]
-        if ego_tokens is not None:
-            ego_expanded = ego_tokens.unsqueeze(1).expand(-1, N, -1)  # (T, N, d_camera)
-        else:
-            ego_expanded = torch.zeros(T, N, self.config.d_camera, device=device)
-
+        # ==================== Step 6: Fuse motion features ====================
         tokens_all = self.motion_fusion(
-            torch.cat([tokens_all, motion_feats, ego_expanded], dim=-1)
+            torch.cat([tokens_all, motion_feats], dim=-1)
         )
         tokens_all = tokens_all * valid_mask_seq.unsqueeze(-1).float()
 
-        # ==================== Step 8: Temporal object encoder ====================
+        # ==================== Step 7: Temporal object encoder ====================
         tokens_all = self.temporal_obj_encoder(
             tokens=tokens_all,
             valid_mask=valid_mask_seq,

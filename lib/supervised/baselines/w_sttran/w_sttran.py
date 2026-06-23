@@ -2,10 +2,16 @@
 W-STTran: World-adapted STTran (Batched)
 ==========================================
 
-Simplest world-centric baseline adaptation of STTran. Uses the LKS Buffer
-for persistent object memory but with NO TemporalEdgeAttention and NO
-camera/motion encoders — analogous to how STTran uses simple relationship
-prediction without explicit object tracking.
+Weakest tier of the nested method ladder. Uses the LKS Buffer for persistent
+object memory plus TemporalEdgeAttention for cross-frame relationship reasoning,
+but NO per-object camera/motion encoders and NO temporal object encoder.
+
+Nested ladder (each tier is a strict superset of the one below):
+  W-STTran     = GSE + spatial transformer + temporal-edge attention   (this file)
+  W-STTran++   = + ObjectSpatialEncoder
+  W-DSGDetr    = + TemporalObjectEncoder
+  W-DSGDetr++  = + ObjectMotionEncoder
+  WorldWise    = + ego-motion + MWAE + tail-aware loss
 
 Single-pass pipeline:
   1. vectorized_lks_buffer(visual, vis, valid)      → (T, N, d_roi), (T, N)
@@ -14,10 +20,10 @@ Single-pass pipeline:
   4. InterObjectTransformer(tokens, corners, valid)  → (T, N, d_model)
   5. NodePredictor(enriched)                         → (T, N, C)
   6. batched_form_and_attend(enriched, logits,...)   → (T, K_max, d_rel)
-  7. batched_predict(rel_tokens, valid)              → distributions
+  7. TemporalEdgeAttention(rel, valid, pidx, oidx)   → (T, K_max, d_rel)
+  8. batched_predict(rel_tokens, valid)              → distributions
 
-Key differences from LKSGNN (PWG):
-  - No TemporalEdgeAttention (simpler, like STTran)
+Key differences from W-STTran++:
   - No ObjectSpatialEncoder (no camera-relative features)
   - No ObjectMotionEncoder (no 3D motion features)
 
@@ -39,17 +45,17 @@ from lib.supervised.worldsgg.lks_buffer.lks_tokenizer import LKSTokenizer
 from lib.supervised.worldsgg.worldsgg_base import (
     GlobalStructuralEncoder, NodePredictor, RelationshipPredictor,
     SpatialGNN as InterObjectTransformer,
+    TemporalEdgeAttention,
 )
 
 
 class WSTTran(nn.Module):
     """
-    W-STTran — World-adapted STTran (batched, no temporal edge attention).
+    W-STTran — World-adapted STTran (batched).
 
-    Simplest baseline adaptation: uses LKS passive memory + InterObjectTransformer
-    + RelationshipPredictor WITHOUT TemporalEdgeAttention. No camera or
-    motion encoders. Relationship tokens are predicted directly after
-    self-attention (Phase 3 of RelationshipPredictor).
+    Weakest ladder tier: LKS passive memory + InterObjectTransformer +
+    RelationshipPredictor + TemporalEdgeAttention. No camera or motion
+    encoders, and no temporal object encoder.
 
     Args:
         config: Method config namespace.
@@ -118,7 +124,13 @@ class WSTTran(nn.Module):
             dropout=config.dropout,
         )
 
-        # NO TemporalEdgeAttention — this is the key difference from PWG
+        # Module 6: Temporal edge attention (cross-frame relationship reasoning)
+        self.temporal_edge_attn = TemporalEdgeAttention(
+            d_rel=config.d_rel,
+            n_heads=config.n_rel_heads,
+            n_layers=config.n_temporal_edge_layers,
+            dropout=config.dropout,
+        )
 
     def forward(
         self,
@@ -180,14 +192,19 @@ class WSTTran(nn.Module):
         # ==================== Step 5: Node prediction ====================
         node_logits_all = self.node_predictor(enriched_all)  # (T, N, num_classes)
 
-        # ==================== Step 6: Edge prediction (no temporal edge attn) ====================
+        # ==================== Step 6: Edge prediction ====================
         rel_tokens, pair_valid_out = self.rel_predictor.batched_form_and_attend(
             enriched_all, node_logits_all, person_idx_seq, object_idx_seq,
             pair_valid, union_features_seq,
         )  # (T, K_max, d_rel), (T, K_max)
 
-        # Skip TemporalEdgeAttention — predict directly from self-attended tokens
-        edge_out = self.rel_predictor.batched_predict(rel_tokens, pair_valid_out)
+        # ==================== Step 7: Temporal edge attention ====================
+        enriched_rel = self.temporal_edge_attn(
+            rel_tokens, pair_valid_out, person_idx_seq, object_idx_seq,
+        )
+
+        # ==================== Step 8: Predict distributions ====================
+        edge_out = self.rel_predictor.batched_predict(enriched_rel, pair_valid_out)
 
         return {
             "node_logits": node_logits_all,

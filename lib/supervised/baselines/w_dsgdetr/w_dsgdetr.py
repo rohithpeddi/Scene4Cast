@@ -11,17 +11,17 @@ persistent object slots instead of Hungarian matching.
 Single-pass pipeline:
   1. vectorized_lks_buffer(visual, vis, valid)      → (T, N, d_roi), (T, N)
   2. GlobalStructuralEncoder(corners)                → (T, N, d_struct)
-  3. LKSTokenizer(struct, buffer, staleness)         → (T, N, d_model)
-  4. TemporalObjectEncoder(tokens, valid)            → (T, N, d_model)
-  5. InterObjectTransformer(tokens, corners, valid)  → (T, N, d_model)
-  6. NodePredictor(enriched)                         → (T, N, C)
-  7. batched_form_and_attend(enriched, logits,...)   → (T, K_max, d_rel)
-  8. TemporalEdgeAttention(rel, valid, pidx, oidx)   → (T, K_max, d_rel)
-  9. batched_predict(enriched_rel, valid)            → distributions
+  3. ObjectSpatialEncoder(pose, corners, valid)      → (T, N, d_camera)
+  4. LKSTokenizer(struct, buffer, cam, staleness)    → (T, N, d_model)
+  5. TemporalObjectEncoder(tokens, valid)            → (T, N, d_model)
+  6. InterObjectTransformer(tokens, corners, valid)  → (T, N, d_model)
+  7. NodePredictor(enriched)                         → (T, N, C)
+  8. batched_form_and_attend(enriched, logits,...)   → (T, K_max, d_rel)
+  9. TemporalEdgeAttention(rel, valid, pidx, oidx)   → (T, K_max, d_rel)
+  10. batched_predict(enriched_rel, valid)           → distributions
 
-Key differences from W-STTran:
-  - TemporalObjectEncoder between tokenizer and InterObjectTransformer
-  - TemporalEdgeAttention for relationship prediction
+Third tier of the nested method ladder. Key differences from W-STTran++:
+  + TemporalObjectEncoder (per-object temporal self-attention)
 """
 
 import logging
@@ -40,6 +40,7 @@ from lib.supervised.worldsgg.lks_buffer.lks_tokenizer import LKSTokenizer
 from lib.supervised.worldsgg.worldsgg_base import (
     GlobalStructuralEncoder, NodePredictor, RelationshipPredictor,
     SpatialGNN as InterObjectTransformer,
+    CameraPoseEncoder as ObjectSpatialEncoder,
     TemporalEdgeAttention,
 )
 
@@ -77,7 +78,12 @@ class WDSGDetr(nn.Module):
             d_hidden=config.d_struct // 2,
         )
 
-        # Module 2: LKS Tokenizer (no camera features in base W-DSGDetr)
+        # Module 2: Object Spatial Encoder — per-object spatial position in camera frame
+        self.object_spatial_encoder = ObjectSpatialEncoder(
+            d_camera=config.d_camera,
+        )
+
+        # Module 3: LKS Tokenizer (with camera features)
         self.tokenizer = LKSTokenizer(
             d_struct=config.d_struct,
             d_detector_roi=config.d_detector_roi,
@@ -85,7 +91,7 @@ class WDSGDetr(nn.Module):
             d_camera=getattr(config, 'd_camera', 128),
         )
 
-        # Module 3: Temporal Object Encoder (DSGDetr-style)
+        # Module 4: Temporal Object Encoder (DSGDetr-style)
         self.temporal_obj_encoder = TemporalObjectEncoder(
             d_model=config.d_model,
             n_heads=config.n_heads,
@@ -174,16 +180,25 @@ class WDSGDetr(nn.Module):
             corners_seq, valid_mask_seq,
         )
 
-        # ==================== Step 3: Tokenizer (no camera) ====================
+        # ==================== Step 3: Object spatial encoding ====================
+        cam_all = None
+        if camera_pose_seq is not None:
+            _, cam_all = self.object_spatial_encoder(
+                camera_pose=camera_pose_seq,
+                corners=corners_seq,
+                valid_mask=valid_mask_seq,
+            )
+
+        # ==================== Step 4: Tokenizer (with camera) ====================
         tokens_all = self.tokenizer(
             geometry_tokens=struct_all,
             buffer_features=buffer_all,
             valid_mask=valid_mask_seq,
-            cam_feats=None,
+            cam_feats=cam_all,
             staleness=staleness_all,
         )
 
-        # ==================== Step 4: Temporal object encoder ====================
+        # ==================== Step 5: Temporal object encoder ====================
         tokens_all = self.temporal_obj_encoder(
             tokens=tokens_all,
             valid_mask=valid_mask_seq,
