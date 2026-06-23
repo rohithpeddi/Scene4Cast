@@ -11,7 +11,11 @@ dataloader/*.pkl
 *.fls
 *.fdb_latexmk
 docs/
-
+.claude/
+.agent/
+.cursor/
+.idea/*
+.previous/*
 datasets/preprocess/inpainting/RoseEdit/weights/transformer/*
 datasets/preprocess/inpainting/RoseEdit/models/*
 
