@@ -10,8 +10,15 @@ Per-method testing classes. Each overrides:
 The dataset returns a single dict with (T, N_max, ...) and (T, K_max, ...)
 pre-padded tensors per video. No per-frame loops needed.
 
+Methods:
+  - w_sttran      : W-STTran      (world-adapted STTran, simplest baseline)
+  - w_sttran_pp   : W-STTran++    (+ camera, motion, temporal edge attention)
+  - w_dsgdetr     : W-DSGDetr     (+ temporal object encoder)
+  - w_dsgdetr_pp  : W-DSGDetr++   (+ camera, motion, ego-motion)
+  - worldwise     : WorldWise     (MWAE-based full proposed method)
+
 Usage:
-  python test_wsgg_methods.py --config configs/methods/predcls/gl_stgn_predcls_dinov2b.yaml --ckpt path/to/ckpt.tar
+  python test_wsgg_methods.py --config configs/methods/predcls/worldwise_predcls_dinov2b.yaml --ckpt path/to/ckpt.tar
 """
 
 import logging
@@ -36,18 +43,18 @@ def _to_device(batch, device):
 
 
 # ============================================================================
-# GL-STGN (Temporal Transformer)
+# W-STTran (World-adapted STTran — simplest baseline)
 # ============================================================================
 
-class TestGLSTGN(TestWSGGBase):
+class TestWSTTran(TestWSGGBase):
 
     def __init__(self, conf):
         super().__init__(conf)
 
     def init_model(self):
-        from lib.supervised.worldsgg.gl_stgn.gl_stgn import GLSTGN
+        from lib.supervised.baselines.w_sttran.w_sttran import WSTTran
 
-        self._model = GLSTGN(
+        self._model = WSTTran(
             config=self._conf,
             num_object_classes=len(self._test_dataset.object_classes),
             attention_class_num=len(self._test_dataset.attention_relationships),
@@ -85,18 +92,76 @@ class TestGLSTGN(TestWSGGBase):
 
 
 # ============================================================================
-# AMWAE (Associative Masked World Auto-Encoder)
+# W-STTran++ (Enhanced: + camera, motion, temporal edge attention)
 # ============================================================================
 
-class TestAMWAE(TestWSGGBase):
+class TestWSTTranPP(TestWSTTran):
+    """W-STTran++ tester — same API, only model class differs."""
+
+    def init_model(self):
+        from lib.supervised.baselines.w_sttran.w_sttran_pp import WSTTranPP
+
+        self._model = WSTTranPP(
+            config=self._conf,
+            num_object_classes=len(self._test_dataset.object_classes),
+            attention_class_num=len(self._test_dataset.attention_relationships),
+            spatial_class_num=len(self._test_dataset.spatial_relationships),
+            contact_class_num=len(self._test_dataset.contacting_relationships),
+        ).to(self._device)
+
+
+# ============================================================================
+# W-DSGDetr (World-adapted DSGDetr — with temporal object encoder)
+# ============================================================================
+
+class TestWDSGDetr(TestWSTTran):
+    """W-DSGDetr tester — same batched API as W-STTran, only model differs."""
+
+    def init_model(self):
+        from lib.supervised.baselines.w_dsgdetr.w_dsgdetr import WDSGDetr
+
+        self._model = WDSGDetr(
+            config=self._conf,
+            num_object_classes=len(self._test_dataset.object_classes),
+            attention_class_num=len(self._test_dataset.attention_relationships),
+            spatial_class_num=len(self._test_dataset.spatial_relationships),
+            contact_class_num=len(self._test_dataset.contacting_relationships),
+        ).to(self._device)
+
+
+# ============================================================================
+# W-DSGDetr++ (Enhanced: + camera, motion, ego-motion)
+# ============================================================================
+
+class TestWDSGDetrPP(TestWDSGDetr):
+    """W-DSGDetr++ tester — same API, only model class differs."""
+
+    def init_model(self):
+        from lib.supervised.baselines.w_dsgdetr.w_dsgdetr_pp import WDSGDetrPP
+
+        self._model = WDSGDetrPP(
+            config=self._conf,
+            num_object_classes=len(self._test_dataset.object_classes),
+            attention_class_num=len(self._test_dataset.attention_relationships),
+            spatial_class_num=len(self._test_dataset.spatial_relationships),
+            contact_class_num=len(self._test_dataset.contacting_relationships),
+        ).to(self._device)
+
+
+# ============================================================================
+# WorldWise (MWAE-based — full proposed method with ablation support)
+# ============================================================================
+
+class TestWorldWise(TestWSGGBase):
+    """WorldWise tester — MWAE-based with config-flag ablation support."""
 
     def __init__(self, conf):
         super().__init__(conf)
 
     def init_model(self):
-        from lib.supervised.worldsgg.amwae.amwae import AMWAE
+        from lib.supervised.worldwise.worldwise import WorldWise
 
-        self._model = AMWAE(
+        self._model = WorldWise(
             config=self._conf,
             num_object_classes=len(self._test_dataset.object_classes),
             attention_class_num=len(self._test_dataset.attention_relationships),
@@ -132,82 +197,17 @@ class TestAMWAE(TestWSGGBase):
 
 
 # ============================================================================
-# LKS Buffer (Passive Memory Baseline)
-# ============================================================================
-
-class TestLKSGNN(TestWSGGBase):
-
-    def __init__(self, conf):
-        super().__init__(conf)
-
-    def init_model(self):
-        from lib.supervised.worldsgg.lks_buffer.lks_gnn import LKSGNN
-
-        self._model = LKSGNN(
-            config=self._conf,
-            num_object_classes=len(self._test_dataset.object_classes),
-            attention_class_num=len(self._test_dataset.attention_relationships),
-            spatial_class_num=len(self._test_dataset.spatial_relationships),
-            contact_class_num=len(self._test_dataset.contacting_relationships),
-        ).to(self._device)
-
-    def is_temporal(self) -> bool:
-        return True
-
-    def process_test_video(self, batch) -> dict:
-        b = _to_device(batch, self._device)
-
-        pred = self._model.forward(
-            visual_features_seq=b["visual_features"],
-            corners_seq=b["corners"],
-            valid_mask_seq=b["valid_mask"],
-            visibility_mask_seq=b["visibility_mask"],
-            person_idx_seq=b["person_idx"],
-            object_idx_seq=b["object_idx"],
-            pair_valid=b["pair_valid"],
-        )
-
-        T = b["visual_features"].shape[0]
-        if T > 0:
-            return {
-                "attention_distribution": pred["attention_distribution"][-1],
-                "spatial_distribution": pred["spatial_distribution"][-1],
-                "contacting_distribution": pred["contacting_distribution"][-1],
-            }
-        return None
-
-
-# ============================================================================
-# AMWAE++ (Energy Transformer variant)
-# ============================================================================
-
-class TestAMWAEPP(TestAMWAE):
-    """AMWAE++ tester — same batched API as AMWAE, only model differs."""
-
-    def __init__(self, conf):
-        super().__init__(conf)
-
-    def init_model(self):
-        from lib.supervised.worldsgg.amwae.amwae_pp import AMWAEPP
-
-        self._model = AMWAEPP(
-            config=self._conf,
-            num_object_classes=len(self._test_dataset.object_classes),
-            attention_class_num=len(self._test_dataset.attention_relationships),
-            spatial_class_num=len(self._test_dataset.spatial_relationships),
-            contact_class_num=len(self._test_dataset.contacting_relationships),
-        ).to(self._device)
-
-
-# ============================================================================
 # Entry Point
 # ============================================================================
 
 METHOD_MAP = {
-    "gl_stgn": TestGLSTGN,
-    "amwae": TestAMWAE,
-    "amwae_pp": TestAMWAEPP,
-    "lks_buffer": TestLKSGNN,
+    # Baseline adaptations (FasterRCNN / ResNet50 backbone)
+    "w_sttran": TestWSTTran,
+    "w_sttran_pp": TestWSTTranPP,
+    "w_dsgdetr": TestWDSGDetr,
+    "w_dsgdetr_pp": TestWDSGDetrPP,
+    # WorldWise (Dino backbones — ablation via config flags)
+    "worldwise": TestWorldWise,
 }
 
 

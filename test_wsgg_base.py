@@ -8,7 +8,6 @@ Analogous to test_sgg_base.py in the SGG pipeline.
 Handles:
   - Dataset loading (WorldAG test)
   - Testing loop
-  - Stratified evaluation (Vis-Vis, Vis-Unseen, Unseen-Unseen)
   - init_method_evaluation() orchestration
 """
 
@@ -40,13 +39,6 @@ class TestWSGGBase(WSGGBase):
         super().__init__(conf)
         self._dataloader_test = None
 
-        # Stratified evaluation accumulators
-        self._stratified_results = {
-            "vis_vis": {"correct": 0, "total": 0},
-            "vis_unseen": {"correct": 0, "total": 0},
-            "unseen_unseen": {"correct": 0, "total": 0},
-        }
-
     # ------------------------------------------------------------------
     # Dataset
     # ------------------------------------------------------------------
@@ -76,7 +68,7 @@ class TestWSGGBase(WSGGBase):
     # Testing Loop
     # ------------------------------------------------------------------
     def _test_model(self):
-        """Main testing loop with stratified evaluation."""
+        """Main testing loop."""
         from lib.supervised.evaluation_recall import evaluate_wsgg_video
 
         start_time = time.time()
@@ -147,48 +139,20 @@ class TestWSGGBase(WSGGBase):
                         mode=self._conf.mode, verbose=False,
                     )
 
-                # Stratified evaluation
-                if prediction is not None:
-                    self._update_stratified_metrics(batch, prediction)
-
         elapsed = time.time() - start_time
         logger.info(f"\nTesting complete: {elapsed:.1f}s")
         logger.info('-------------------------------------------------------------------')
-
-    def _update_stratified_metrics(self, batch, prediction):
-        """
-        Update stratified evaluation buckets based on visibility.
-
-        For each edge prediction, classify into:
-          - Vis-Vis: both subject and object were visible
-          - Vis-Unseen: one visible, one unseen
-          - Unseen-Unseen: both unseen
-        """
-        # Subclasses can override this with actual visibility info
-        pass
-
-    def _print_stratified_results(self):
-        """Print stratified evaluation results."""
-        logger.info("\n===== Stratified Evaluation Results =====")
-        for bucket_name, stats in self._stratified_results.items():
-            total = stats["total"]
-            correct = stats["correct"]
-            acc = correct / total if total > 0 else 0.0
-            logger.info(f"  {bucket_name}: {correct}/{total} = {acc:.4f}")
-        logger.info("=========================================\n")
 
     # ------------------------------------------------------------------
     # Evaluation Publishing
     # ------------------------------------------------------------------
     def _publish_evaluation_results(self):
-        """Publish evaluation stats and stratified results."""
+        """Publish evaluation stats."""
         if self._evaluator is not None:
             logger.info("--- With-Constraint ---")
             self._evaluator.print_stats()
             logger.info("--- No-Constraint ---")
             self._evaluator_nc.print_stats()
-
-        self._print_stratified_results()
 
     # ------------------------------------------------------------------
     # Orchestration

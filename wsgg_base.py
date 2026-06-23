@@ -63,14 +63,11 @@ def load_wsgg_config(yaml_path: str = None) -> SimpleNamespace:
     parser.add_argument("--d_model", default=None, type=int)
     parser.add_argument("--d_struct", default=None, type=int)
     parser.add_argument("--d_visual", default=None, type=int)
-    parser.add_argument("--d_memory", default=None, type=int)
     parser.add_argument("--d_camera", default=None, type=int)
-    parser.add_argument("--d_motion", default=None, type=int)
     parser.add_argument("--n_heads", default=None, type=int)
     parser.add_argument("--dropout", default=None, type=float)
     parser.add_argument("--batch_size", default=None, type=int)
     parser.add_argument("--lambda_vlm", default=None, type=float)
-    parser.add_argument("--lambda_smooth", default=None, type=float)
     parser.add_argument("--label_smoothing_vlm", default=None, type=float)
     parser.add_argument("--use_wandb", action="store_true", default=None)
     parser.add_argument("--use_amp", action="store_true", default=None)
@@ -93,21 +90,18 @@ def load_wsgg_config(yaml_path: str = None) -> SimpleNamespace:
     # Coerce known numeric fields to correct types (YAML may parse 1e-4 as str)
     _FLOAT_KEYS = {
         "lr", "weight_decay", "grad_clip", "dropout",
-        "lambda_vlm", "lambda_smooth", "label_smoothing_vlm",
+        "lambda_vlm", "label_smoothing_vlm",
         "lambda_reconstruction", "lambda_recon_dominance",
-        "lambda_contrastive", "lambda_stability",
         "p_simulate_unseen", "p_mask_visible",
-        "warmup_fraction", "movement_thresh",
-        "energy_epsilon",
+        "warmup_fraction",
     }
     _INT_KEYS = {
-        "nepoch", "d_model", "d_struct", "d_visual", "d_memory",
-        "d_camera", "d_motion", "d_feedforward", "d_rel", "d_text",
+        "nepoch", "d_model", "d_struct", "d_visual",
+        "d_camera", "d_feedforward", "d_rel", "d_text",
         "d_detector_roi", "d_union_roi",
         "n_heads", "n_rel_layers", "n_rel_heads",
-        "n_graph_layers", "n_gnn_layers", "n_temporal_layers",
-        "n_temporal_edge_layers",
-        "batch_size", "max_objects", "max_T", "log_every",
+        "n_gnn_layers", "n_temporal_edge_layers",
+        "batch_size", "max_objects", "log_every",
     }
     for k in _FLOAT_KEYS:
         if k in merged and merged[k] is not None:

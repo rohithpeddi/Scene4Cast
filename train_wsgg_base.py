@@ -14,8 +14,6 @@ Handles:
   - init_method_training() orchestration
 """
 
-import copy
-import gc
 import json
 import logging
 import os
@@ -26,7 +24,6 @@ import numpy as np
 import pandas as pd
 import torch
 import wandb
-from torch import nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -99,16 +96,6 @@ class TrainWSGGBase(WSGGBase):
             logger.info(f"  Train: {len(self._train_dataset)} items | Test: {len(self._test_dataset)} items")
         else:
             logger.info(f"  Train: {len(self._train_dataset)} items | Test: SKIPPED")
-
-    # ------------------------------------------------------------------
-    # Loss Functions
-    # ------------------------------------------------------------------
-    def _init_loss_functions(self):
-        """Initialize standard CE and BCE losses."""
-        self._ce_loss = nn.CrossEntropyLoss()
-        self._bce_loss = nn.BCELoss()
-
-
 
     # ------------------------------------------------------------------
     # Training Loop
@@ -355,7 +342,6 @@ class TrainWSGGBase(WSGGBase):
 
     def _save_best_model(self, epoch: int, score: float) -> None:
         """Save model weights as best_model.pth when recall improves."""
-        import os
         best_path = os.path.join(self._experiment_dir, "best_model.pth")
         torch.save({
             "epoch": epoch,
@@ -382,7 +368,6 @@ class TrainWSGGBase(WSGGBase):
         # 3. Model + Loss
         self.init_model()
         self.init_loss_fn()
-        self._init_loss_functions()
 
         # 4. Optimizer + Scheduler
         self._init_optimizer()
