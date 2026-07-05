@@ -4,9 +4,12 @@ Aggregate WorldSGG grid results into the two hierarchy tables.
 Reads results/<experiment>_metrics.jsonl (one row per epoch, written by
 train_wsgg_base.py) for every grid cell and emits:
 
-  Table A — method comparison at a fixed (hero) backbone   [rows = ladder]
-  Table B — backbone scaling for WorldWise                 [rows = backbones]
-  Table C — WorldWise⁺ plugin ladder at the hero backbone  [--tiers]
+  Table A — method comparison @ the common backbone (resnet50) [rows = ladder]
+  Table B — backbone scaling for WorldWise                     [rows = backbones]
+  Table C — WorldWise⁺ plugin ladder @ the hero backbone       [--tiers]
+
+Grid structure (July 2026): baselines exist only at resnet50; WorldWise at
+all four backbones; tiers at the hero backbone (dinov3l).
 
 For each cell we select one epoch (default: the epoch with the best
 With-Constraint R@20, matching the checkpoint-selection metric) and read all
@@ -26,9 +29,14 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
+METHODS_BACKBONE = "resnet50"  # the only backbone all 5 methods share
 # Stage-A cumulative ladder + A/B + Stage-B research plugins
 # (must match WW_PLUS_TIERS in tools/gen_grid_configs.py)
 TIERS = ["plus1", "plus2", "plus3", "noema", "conf", "proto", "xobj", "energy"]
+
+
+def valid_combo(method, backbone):
+    return method == "worldwise" or backbone == METHODS_BACKBONE
 KS = [10, 20, 50]
 METRIC_COLS = (
     [f"wc/R@{k}" for k in KS] + [f"wc/mR@{k}" for k in KS]
@@ -110,14 +118,14 @@ def main():
                     help="also render Table C (WorldWise⁺ plugin ladder)")
     args = ap.parse_args()
 
-    # Load every cell
+    # Load every cell in the design
     grid = {}
     for m in METHODS:
         for b in BACKBONES:
             grid[(m, b)] = load_cell(
                 args.results_dir, m, args.mode, b, args.select, args.sel_metric,
                 args.version,
-            )
+            ) if valid_combo(m, b) else None
 
     # ---- CSV dump ----
     csv_path = os.path.join(args.results_dir, f"grid_summary_{args.mode}.csv")
@@ -127,6 +135,8 @@ def main():
         w.writerow(["method", "backbone", "mode", "epoch"] + METRIC_COLS)
         for m in METHODS:
             for b in BACKBONES:
+                if not valid_combo(m, b):
+                    continue  # not part of the design (baseline @ non-resnet50)
                 r = grid[(m, b)]
                 if r is None:
                     w.writerow([m, b, args.mode, "—"] + ["—"] * len(METRIC_COLS))
@@ -134,11 +144,11 @@ def main():
                     w.writerow([m, b, args.mode, r.get("epoch", "?")]
                                + [r.get(c, "") for c in METRIC_COLS])
 
-    # ---- Table A: method comparison at hero backbone ----
-    a_cells = {m: grid[(m, args.hero_backbone)] for m in METHODS}
+    # ---- Table A: method comparison at the common backbone (resnet50) ----
+    a_cells = {m: grid[(m, METHODS_BACKBONE)] for m in METHODS}
     print(f"\n# WorldSGG hierarchy — mode={args.mode}, select={args.select} ({args.sel_metric})")
-    print(render_table(f"Table A · Methods @ {args.hero_backbone}", METHODS, METHODS, a_cells, "wc"))
-    print(render_table(f"Table A · Methods @ {args.hero_backbone}", METHODS, METHODS, a_cells, "nc"))
+    print(render_table(f"Table A · Methods @ {METHODS_BACKBONE}", METHODS, METHODS, a_cells, "wc"))
+    print(render_table(f"Table A · Methods @ {METHODS_BACKBONE}", METHODS, METHODS, a_cells, "nc"))
 
     # ---- Table B: WorldWise backbone scaling ----
     b_cells = {b: grid[("worldwise", b)] for b in BACKBONES}

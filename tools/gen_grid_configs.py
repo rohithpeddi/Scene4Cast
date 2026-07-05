@@ -1,7 +1,12 @@
 """
 Generate the WorldSGG hierarchy-experiment config grid.
 
-Grid = 5 methods x 4 backbones x 2 tasks = 40 configs (1 fixed seed each).
+Grid structure (July 2026 restructure):
+  baselines  x resnet50 only    — method-comparison happens at the common backbone
+  worldwise  x all 4 backbones  — backbone-scaling story is WorldWise-only
+
+  = 4 baselines x 1 backbone x 2 tasks (8)
+  + worldwise x 4 backbones x 2 tasks (8)   → 16 base configs (1 fixed seed each)
 
   methods   : w_sttran, w_sttran_pp, w_dsgdetr, w_dsgdetr_pp, worldwise
   backbones : resnet50, dinov2b, dinov2l, dinov3l   (feature_model dir name)
@@ -35,10 +40,16 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
 MODES = ["predcls", "sgdet"]
-HERO_BACKBONE = "dinov3l"
+HERO_BACKBONE = "dinov3l"        # WorldWise⁺ tiers run here
+METHODS_BACKBONE = "resnet50"    # baselines run here only (method comparison)
 VERSION = "v2"
 
 SEED = 0
+
+
+def backbones_for(method):
+    """Baselines run only at the common backbone; WorldWise scales across all."""
+    return BACKBONES if method == "worldwise" else [METHODS_BACKBONE]
 
 # Keys shared by every method (ladder is realised in code, not via flags).
 COMMON = [
@@ -190,16 +201,27 @@ def main():
     args = ap.parse_args()
 
     n = 0
+    removed = 0
     for mode in MODES:
         out_dir = os.path.join(REPO, "configs", "methods", mode)
         os.makedirs(out_dir, exist_ok=True)
         for method in METHODS:
-            for backbone in BACKBONES:
+            for backbone in backbones_for(method):
                 fname = f"{method}_{mode}_{backbone}.yaml"
                 with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
                     f.write(render(method, mode, backbone))
                 n += 1
                 print(f"  wrote configs/methods/{mode}/{fname}")
+            # Drop stale configs for combos no longer in the design
+            # (baselines at non-resnet50 backbones)
+            for backbone in BACKBONES:
+                if backbone in backbones_for(method):
+                    continue
+                stale = os.path.join(out_dir, f"{method}_{mode}_{backbone}.yaml")
+                if os.path.exists(stale):
+                    os.remove(stale)
+                    removed += 1
+                    print(f"  removed stale configs/methods/{mode}/{method}_{mode}_{backbone}.yaml")
 
         if args.tiers:
             for tier in WW_PLUS_TIERS:
@@ -208,7 +230,7 @@ def main():
                     f.write(render("worldwise", mode, HERO_BACKBONE, tier=tier))
                 n += 1
                 print(f"  wrote configs/methods/{mode}/{fname}")
-    print(f"\nGenerated {n} configs.")
+    print(f"\nGenerated {n} configs ({removed} stale removed).")
 
 
 if __name__ == "__main__":

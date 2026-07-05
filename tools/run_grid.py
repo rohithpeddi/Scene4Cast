@@ -37,6 +37,12 @@ METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
 MODES = ["predcls", "sgdet"]
 TIERS = ["plus1", "plus2", "plus3", "noema", "conf", "proto", "xobj", "energy"]
+METHODS_BACKBONE = "resnet50"  # baselines exist only here; worldwise everywhere
+
+
+def _valid(method, backbone):
+    """Baselines run only at resnet50; worldwise (incl. tiers) at any backbone."""
+    return method.startswith("worldwise") or backbone == METHODS_BACKBONE
 
 
 def main():
@@ -75,7 +81,8 @@ def main():
     cells = [(mode, m, b)
              for mode in args.modes
              for m in args.methods
-             for b in args.backbones]
+             for b in args.backbones
+             if _valid(m, b)]
 
     print(f"\n{len(cells)} cells to run:")
     for mode, m, b in cells:
