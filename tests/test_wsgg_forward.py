@@ -208,6 +208,20 @@ def test_worldwise_plugins():
         out = _run(model, batch)
     assert "enriched" in out and "h_prev" in out, "I-8 must emit enriched/h_prev"
 
+    # I-3 retry variant: attention bias WITH the pooled spatial PE kept
+    cfg = make_config(use_geometric_attn_bias=True, attn_bias_keep_pe=True)
+    model = _worldwise(cfg)
+    assert hasattr(model.inter_object_encoder, "spatial_pe"), \
+        "attn_bias_keep_pe must instantiate the pooled spatial PE"
+    model.train()
+    out = _run(model, batch, p_mask_visible=0.5)
+    check_outputs(out, "WorldWise[attn_bias+pe][train]")
+    out["attention_logits"].sum().backward()
+    model.eval()
+    with torch.no_grad():
+        check_outputs(_run(model, batch), "WorldWise[attn_bias+pe][eval]")
+    print("  OK WorldWise[attn_bias+pe]")
+
 
 def test_worldwise_loss():
     from lib.supervised.worldwise.loss import WorldWiseLoss

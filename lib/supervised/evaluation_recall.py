@@ -781,19 +781,15 @@ def evaluate_wsgg_video(
         pred_classes = pred_pkl.get("pred_labels", gt_classes).astype(np.int64)
         obj_scores = pred_pkl.get("pred_scores", np.ones(len(gt_classes))).astype(np.float32)
 
-        pred_3d = pred_pkl.get("bboxes_3d", None)
-        if pred_3d is not None:
-            N = len(gt_classes)
-            iou_2d = np.array([
-                bbox_overlaps(gt_boxes[i:i+1], pred_boxes[i:i+1])[0, 0]
-                if i < pred_boxes.shape[0] else 0.0 for i in range(N)
-            ])
-            gt_3d = pred_pkl.get("gt_corners", pred_3d)  # real GT 3D if available
-            iou_3d = np.array([
-                bbox_overlaps_3d(gt_3d[i:i+1], pred_3d[i:i+1])[0, 0]
-                if i < pred_3d.shape[0] else 0.0 for i in range(N)
-            ])
-            obj_scores = 0.8 * iou_2d + 0.2 * iou_3d
+        # NOTE (round-1 fix): obj_scores are intentionally NOT replaced with an
+        # IoU-to-GT blend here. The no-constraint ranking multiplies relation
+        # scores by obj_scores[pair].prod(), so an IoU-based score (a) is
+        # identical for every relation method (same detector) and (b) is noisy
+        # enough to dominate the top-100 ranking — round-1 nc-sgdet numbers
+        # were method-invariant and *below* wc because of this. Localization
+        # quality is already enforced by the triplet matcher (2D IoU >= 0.5),
+        # so ranking uses detector confidence (uniform when unavailable) and
+        # the relation scores carry the signal.
 
     if verbose:
         _log.info(

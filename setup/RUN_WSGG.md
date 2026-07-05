@@ -52,7 +52,7 @@ methods) and **dinov2b/dinov2l/dinov3l × both modes** (WorldWise only).
 python tests/test_wsgg_forward.py
 
 # b. Param-count freeze artifact (asserts the ladder is monotone)
-python tools/dump_param_counts.py --out experiments/param_counts.md
+python tools/dump_param_counts.py --out docs/param_counts.md
 
 # c. Regenerate configs (16 base + 16 tier = 32, deletes stale ones)
 python tools/gen_grid_configs.py --tiers
@@ -87,7 +87,17 @@ One worker per GPU pulls from a shared, priority-ordered queue:
 | 1 | `table_a` | 5 methods × resnet50 × 2 modes (10) | Method-comparison table |
 | 2 | `scaling` | worldwise × dinov2b/2l/3l × 2 modes (6) | Backbone scaling + tier I-0 ref |
 | 3 | `stage_a` | plus1/plus2/plus3/noema @ dinov3l (8) | Cumulative plugin ladder + EMA A/B |
-| 4 | `stage_b` | conf/proto/xobj/energy @ dinov3l (8) | Research plugins — gate on Stage A first |
+| 4 | `tune` | tau025/tau05/tau075 + plus3pe @ dinov3l (8) | Round-1 follow-ups: τ sweep + I-3 retry |
+| 5 | `subtract` | notau/lowmask/nomask/novlm/nomotion/noego @ dinov3l (12) | Subtraction study — what to REMOVE |
+| 6 | `v2` | v2a/v2b/v2c/v2d × {resnet50, dinov3l} × 2 modes (16) | Recomposition candidates → the final ladder row |
+| 7 | `stage_b` | conf/proto/xobj/energy @ dinov3l (8) | Research plugins — gate on Stage A first |
+
+Final tables once a v2 winner is chosen (winner also needs dinov2b/2l runs via
+`python tools/run_grid.py --methods worldwise --tiers v2b --backbones dinov2b dinov2l`):
+
+```bash
+python tools/aggregate_results.py --mode predcls --tiers --v2 v2b   # ladder row + v2 scaling
+```
 
 - Per-run logs: `logs/grid/<experiment>.log`; live status:
   `results/grid_run_status.csv`.
@@ -136,7 +146,7 @@ python tools/aggregate_results.py --mode sgdet  --tiers
 A plugin survives if it moves its **target metric** by ≥ +0.3 @ dinov3l
 without degrading the other task (targets per plugin in
 [WORLDWISE.md](WORLDWISE.md)). Record every verdict in
-[experiments/DECISION_LOG.md](../experiments/DECISION_LOG.md) — hypothesis,
+`docs/DECISION_LOG.md` — hypothesis,
 run IDs, deltas, keep/drop, follow-up.
 
 ## Troubleshooting

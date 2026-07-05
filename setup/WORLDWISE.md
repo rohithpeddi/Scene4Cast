@@ -104,7 +104,7 @@ Cumulative Stage-A tiers: `plus1` = {I-1}, `plus2` = {I-1,2}, `plus3` =
 {I-1,2,3}; Stage-B research plugins (`conf`, `proto`, `xobj`, `energy`) run
 one-at-a-time on the Stage-A winner. Gate: ≥ +0.3 on the plugin's target
 metric at dinov3l without degrading the other task
-(see [experiments/DECISION_LOG.md](../experiments/DECISION_LOG.md)).
+(see `docs/DECISION_LOG.md`).
 
 ## What separates WorldWise from W-DSGDetr++ (the strongest baseline)
 

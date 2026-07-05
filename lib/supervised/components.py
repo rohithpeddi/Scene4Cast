@@ -344,6 +344,12 @@ class BiasedSpatialGNN(nn.Module):
     Drop-in replacement for SpatialGNN: same constructor signature (plus
     n_heads used for the bias width) and the same
     forward(tokens, corners, valid_mask) interface.
+
+    add_spatial_pe (round-1 retry): also add SpatialGNN's pooled spatial
+    positional encoding to the input tokens. The pure-swap variant lost the
+    per-object aggregate geometry the PE carried (round-1: −4 R@20 predcls);
+    this variant keeps both signals — pooled PE in the tokens, pairwise bias
+    in the attention logits.
     """
 
     def __init__(
@@ -354,9 +360,14 @@ class BiasedSpatialGNN(nn.Module):
         d_feedforward: int = 512,
         dropout: float = 0.1,
         d_bias_hidden: int = 32,
+        add_spatial_pe: bool = False,
     ):
         super().__init__()
         self.n_heads = n_heads
+        self.add_spatial_pe = add_spatial_pe
+
+        if self.add_spatial_pe:
+            self.spatial_pe = SpatialPositionalEncoding(d_model=d_model)
 
         # Pairwise geometric features → per-head attention bias
         self.bias_mlp = nn.Sequential(
@@ -418,8 +429,10 @@ class BiasedSpatialGNN(nn.Module):
             padding_mask = padding_mask.clone()
             padding_mask[all_invalid, 0] = False
 
-        # 3. Biased attention layers
+        # 3. Biased attention layers (optionally seeded with the pooled PE)
         x = tokens
+        if self.add_spatial_pe:
+            x = x + self.spatial_pe(corners, valid_mask)
         for layer in self.layers:
             x = layer(x, bias, padding_mask)
         x = self.final_norm(x)

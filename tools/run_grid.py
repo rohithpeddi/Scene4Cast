@@ -36,7 +36,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
 MODES = ["predcls", "sgdet"]
-TIERS = ["plus1", "plus2", "plus3", "noema", "conf", "proto", "xobj", "energy"]
+TIERS = ["plus1", "plus2", "plus3", "plus3pe", "noema",
+         "tau025", "tau05", "tau075",
+         "notau", "lowmask", "nomask", "novlm", "nomotion", "noego",
+         "v2a", "v2b", "v2c", "v2d",
+         "conf", "proto", "xobj", "energy"]
 METHODS_BACKBONE = "resnet50"  # baselines exist only here; worldwise everywhere
 
 

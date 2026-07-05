@@ -116,12 +116,14 @@ WORLDWISE_EXTRA = [
     # Tail-aware loss (WorldWise-exclusive)
     ("use_logit_adjustment", True),
     ("logit_adjustment_tau", 1.0),
-    ("predicate_priors_path", "features/predicate_priors.json"),
+    # predicate_priors_path is mode-specific — filled in by render()
+    ("predicate_priors_path", "features/predicate_priors_{mode}.json"),
     # ---- WorldWise⁺ plugin flags (I-0 = everything off; I-4 fix = on) ----
     ("use_ema_recon_target", True),
     ("use_pair_geometry", False),
     ("use_soft_text_embedding", False),
     ("use_geometric_attn_bias", False),
+    ("attn_bias_keep_pe", False),
     ("use_confidence_weighted_vlm", False),
     ("use_predicate_prototypes", False),
     ("use_cross_object_retrieval", False),
@@ -138,14 +140,51 @@ WW_PLUS_TIERS = {
     "plus2": {"use_pair_geometry": True, "use_soft_text_embedding": True},
     "plus3": {"use_pair_geometry": True, "use_soft_text_embedding": True,
               "use_geometric_attn_bias": True},
+    # I-3 retry (round-1 P6): keep the spatial PE AND add the attention bias
+    # (the plus3 R-drop is suspected to be the lost PE, not the bias). Built
+    # on plus1 only — I-2 is a provisional drop from round 1.
+    "plus3pe": {"use_pair_geometry": True, "use_geometric_attn_bias": True,
+                "attn_bias_keep_pe": True},
     # A/B control for the Phase-2 EMA-target fix (predcls only is enough)
     "noema": {"use_ema_recon_target": False},
+    # τ sweep (round-1 P1): the τ=1.0 default trades ~13 R@20 points for the
+    # mR gain — find the knee of the R/mR curve.
+    "tau025": {"logit_adjustment_tau": 0.25},
+    "tau05":  {"logit_adjustment_tau": 0.5},
+    "tau075": {"logit_adjustment_tau": 0.75},
+    # Subtraction tiers (round-1.5): WorldWise carries training pressures the
+    # baselines don't — test whether REMOVING them recovers R@K. Each removes
+    # exactly one thing from I-0.
+    "notau":   {"use_logit_adjustment": False},        # no tail rebalancing at all
+    "lowmask": {"p_mask_visible": 0.1},                # gentler artificial masking
+    "nomask":  {"p_mask_visible": 0.0,                 # no artificial masking →
+                "p_simulate_unseen": 0.0},             #   recon/sim losses vanish
+    "novlm":   {"lambda_vlm": 0.0},                    # drop noisy unseen-pair labels
+    "nomotion": {"use_object_motion_encoder": False},  # component subtraction
+    "noego":    {"use_camera_temporal": False},        # component subtraction
     # Stage B — research plugins (run one at a time on the Stage-A winner)
     "conf":   {"use_confidence_weighted_vlm": True},
     "proto":  {"use_predicate_prototypes": True},
     "xobj":   {"use_cross_object_retrieval": True},
     "energy": {"use_energy_refinement": True, "lambda_stability": 0.1},
+    # ---- WorldWise-v2 recomposition candidates (round 2) ----
+    # Each = I-0 + I-1 (the only R-positive plugin) + tuned training pressures.
+    # They bracket the expected optimum so ONE campaign settles the final
+    # composition: v2a = mild fix (τ only) · v2b = τ + gentler masking ·
+    # v2c = R-leaning (low τ) · v2d = v2b + drop noisy VLM labels.
+    "v2a": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5},
+    "v2b": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5,
+            "p_mask_visible": 0.1},
+    "v2c": {"use_pair_geometry": True, "logit_adjustment_tau": 0.25,
+            "p_mask_visible": 0.1},
+    "v2d": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5,
+            "p_mask_visible": 0.1, "lambda_vlm": 0.0},
 }
+
+# v2 candidates compete for the FINAL ladder, so unlike diagnostic tiers they
+# are generated at every backbone: the ladder table lives at resnet50 and the
+# winner also fills Table B (all backbones).
+V2_CANDIDATES = ["v2a", "v2b", "v2c", "v2d"]
 
 
 def fmt(v):
@@ -176,6 +215,12 @@ def render(method, mode, backbone, tier=None):
     items = list(COMMON)
     if method == "worldwise":
         items = items + WORLDWISE_EXTRA
+        # Mode-specific priors file (predcls/sgdet label distributions differ;
+        # a single shared path let one mode's priors overwrite the other's)
+        items = [
+            (k, v.format(mode=mode) if k == "predicate_priors_path" else v)
+            for k, v in items
+        ]
         if tier:
             overrides = WW_PLUS_TIERS[tier]
             items = [(k, overrides.get(k, v)) for k, v in items]
@@ -226,11 +271,16 @@ def main():
 
         if args.tiers:
             for tier in WW_PLUS_TIERS:
-                fname = f"worldwise_{tier}_{mode}_{HERO_BACKBONE}.yaml"
-                with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
-                    f.write(render("worldwise", mode, HERO_BACKBONE, tier=tier))
-                n += 1
-                print(f"  wrote configs/methods/{mode}/{fname}")
+                # Diagnostic tiers live at the hero backbone; v2 recomposition
+                # candidates are generated at every backbone (ladder @ resnet50,
+                # scaling for the winner).
+                tier_backbones = BACKBONES if tier in V2_CANDIDATES else [HERO_BACKBONE]
+                for backbone in tier_backbones:
+                    fname = f"worldwise_{tier}_{mode}_{backbone}.yaml"
+                    with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
+                        f.write(render("worldwise", mode, backbone, tier=tier))
+                    n += 1
+                    print(f"  wrote configs/methods/{mode}/{fname}")
     print(f"\nGenerated {n} configs ({removed} stale removed).")
 
 

@@ -59,11 +59,12 @@ use_object_motion_encoder: true
 use_temporal_edge_attn: true
 use_logit_adjustment: true
 logit_adjustment_tau: 1.0
-predicate_priors_path: features/predicate_priors.json
+predicate_priors_path: features/predicate_priors_predcls.json
 use_ema_recon_target: true
 use_pair_geometry: false
 use_soft_text_embedding: false
 use_geometric_attn_bias: false
+attn_bias_keep_pe: false
 use_confidence_weighted_vlm: false
 use_predicate_prototypes: true
 use_cross_object_retrieval: false

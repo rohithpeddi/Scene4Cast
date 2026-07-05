@@ -21,7 +21,8 @@ Queue order (highest priority first — the decision-critical cells finish first
   1. table_a  — 5 methods @ resnet50, both modes         (method comparison, 10)
   2. scaling  — worldwise @ dinov2b/dinov2l/dinov3l      (Table B + tier I-0 ref, 6)
   3. stage_a  — worldwise plus1/plus2/plus3 + noema @ dinov3l  (plugin ladder, 8)
-  4. stage_b  — conf/proto/xobj/energy @ dinov3l          (research plugins, 8)
+  4. tune     — tau025/tau05/tau075 + plus3pe @ dinov3l   (round-1 follow-ups, 8)
+  5. stage_b  — conf/proto/xobj/energy @ dinov3l          (research plugins, 8)
      (interpret AFTER the Stage-A gate — they run last so you can stop early)
 
 Each run's stdout/stderr goes to logs/grid/<experiment>.log; a status line is
@@ -62,8 +63,17 @@ HERO = "dinov3l"                 # WorldWise⁺ tiers run here
 METHODS_BACKBONE = "resnet50"    # all 5 methods compared here
 SCALING_BACKBONES = ["dinov2b", "dinov2l", "dinov3l"]  # worldwise-only extras
 STAGE_A_TIERS = ["plus1", "plus2", "plus3", "noema"]
+# Round-1 follow-ups: τ sweep for the tail-aware loss + I-3 PE+bias retry
+TUNE_TIERS = ["tau025", "tau05", "tau075", "plus3pe"]
+# Round-1.5 subtraction study: does REMOVING training pressure recover R@K?
+SUBTRACT_TIERS = ["notau", "lowmask", "nomask", "novlm", "nomotion", "noego"]
+# Round-2 recomposition candidates — run at the LADDER backbone (resnet50,
+# where Table A lives) AND the hero backbone; the winner then scales to the
+# remaining backbones via run_grid.py.
+V2_TIERS = ["v2a", "v2b", "v2c", "v2d"]
+V2_BACKBONES = [METHODS_BACKBONE, HERO]
 STAGE_B_TIERS = ["conf", "proto", "xobj", "energy"]
-STAGES = ["table_a", "scaling", "stage_a", "stage_b"]
+STAGES = ["table_a", "scaling", "stage_a", "tune", "subtract", "v2", "stage_b"]
 
 
 def read_config_fields(cfg_path):
@@ -119,6 +129,25 @@ def build_schedule(args):
         for mode in args.modes:
             for t in STAGE_A_TIERS:
                 add("stage_a", f"worldwise_{t}_{mode}_{HERO}", mode)
+
+    # 3b. Round-1 tuning follow-ups: τ sweep + I-3 PE+bias retry @ hero
+    if "tune" in args.stages:
+        for mode in args.modes:
+            for t in TUNE_TIERS:
+                add("tune", f"worldwise_{t}_{mode}_{HERO}", mode)
+
+    # 3c. Round-1.5 subtraction study @ hero
+    if "subtract" in args.stages:
+        for mode in args.modes:
+            for t in SUBTRACT_TIERS:
+                add("subtract", f"worldwise_{t}_{mode}_{HERO}", mode)
+
+    # 3d. Round-2 recomposition candidates @ ladder + hero backbones
+    if "v2" in args.stages:
+        for mode in args.modes:
+            for t in V2_TIERS:
+                for b in V2_BACKBONES:
+                    add("v2", f"worldwise_{t}_{mode}_{b}", mode)
 
     # 4. Stage B research plugins @ hero backbone (gate on Stage A first)
     if "stage_b" in args.stages:

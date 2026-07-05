@@ -164,15 +164,25 @@ class WorldWise(nn.Module):
         self.visibility_emb = nn.Embedding(2, config.d_model)
 
         # Module 8: Inter-Object Transformer
-        # (I-3: pairwise-geometry attention bias instead of pooled spatial PE)
-        inter_object_cls = BiasedSpatialGNN if self.use_geometric_attn_bias else InterObjectTransformer
-        self.inter_object_encoder = inter_object_cls(
-            d_model=config.d_model,
-            n_layers=config.n_self_attn_layers,
-            n_heads=config.n_heads,
-            d_feedforward=config.d_feedforward,
-            dropout=config.dropout,
-        )
+        # (I-3: pairwise-geometry attention bias; attn_bias_keep_pe keeps the
+        #  pooled spatial PE as well — the round-1 PE+bias retry variant)
+        if self.use_geometric_attn_bias:
+            self.inter_object_encoder = BiasedSpatialGNN(
+                d_model=config.d_model,
+                n_layers=config.n_self_attn_layers,
+                n_heads=config.n_heads,
+                d_feedforward=config.d_feedforward,
+                dropout=config.dropout,
+                add_spatial_pe=getattr(config, 'attn_bias_keep_pe', False),
+            )
+        else:
+            self.inter_object_encoder = InterObjectTransformer(
+                d_model=config.d_model,
+                n_layers=config.n_self_attn_layers,
+                n_heads=config.n_heads,
+                d_feedforward=config.d_feedforward,
+                dropout=config.dropout,
+            )
 
         # Module 8b: Energy refinement (plugin I-8) — weight-tied recurrent
         # transformer descending an energy landscape over object tokens.

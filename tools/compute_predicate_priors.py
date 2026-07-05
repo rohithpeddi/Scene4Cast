@@ -39,7 +39,8 @@ def main():
     ap.add_argument("--max_objects", type=int, default=64)
     ap.add_argument(
         "--out", default=None,
-        help="output JSON (default: <data_path>/features/predicate_priors.json)",
+        help="output JSON (default: <data_path>/features/predicate_priors_<mode>.json; "
+             "mode-specific so predcls and sgdet priors never overwrite each other)",
     )
     args = ap.parse_args()
 
@@ -83,7 +84,9 @@ def main():
         "feature_model": args.feature_model,
     }
 
-    out = args.out or os.path.join(args.data_path, "features", "predicate_priors.json")
+    out = args.out or os.path.join(
+        args.data_path, "features", f"predicate_priors_{args.mode}.json"
+    )
     Path(os.path.dirname(out)).mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:
         json.dump(priors, f, indent=2)
