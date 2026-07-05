@@ -79,14 +79,6 @@ class ScaffoldTokenizer(nn.Module):
             for p in self.target_projector.parameters():
                 p.requires_grad_(False)
 
-    @torch.no_grad()
-    def _update_ema_target(self):
-        m = self.ema_momentum
-        for p_t, p_s in zip(
-            self.target_projector.parameters(), self.visual_projector.parameters()
-        ):
-            p_t.mul_(m).add_(p_s.detach(), alpha=1.0 - m)
-
         # Learnable [MASK] embedding — replaces DINO features for unseen objects
         self.mask_embedding = nn.Parameter(torch.randn(d_visual) * 0.02)
 
@@ -97,6 +89,14 @@ class ScaffoldTokenizer(nn.Module):
             nn.ReLU(inplace=True),
             nn.LayerNorm(d_model),
         )
+
+    @torch.no_grad()
+    def _update_ema_target(self):
+        m = self.ema_momentum
+        for p_t, p_s in zip(
+            self.target_projector.parameters(), self.visual_projector.parameters()
+        ):
+            p_t.mul_(m).add_(p_s.detach(), alpha=1.0 - m)
 
     def forward(
         self,
