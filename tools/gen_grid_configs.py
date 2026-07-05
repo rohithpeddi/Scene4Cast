@@ -88,6 +88,7 @@ COMMON = [
     ("optimizer", "adamw"),
     ("bce_loss", True),
     ("use_wandb", True),
+    ("wandb_project", "worldsgg-v2"),
     ("use_amp", True),
     ("log_every", 100),
     ("include_invisible", True),

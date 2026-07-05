@@ -17,7 +17,15 @@ comparison at the common backbone); WorldWise runs at **all four backbones**
   `annotations/`, `world_annotations/`, `world4d_rel_annotations/{train,test}/`,
   and `features/clip_features/clip_text_embeddings.npy`.
 - Trained detector checkpoints per backbone (see [RUN_MON3D.md](RUN_MON3D.md)).
-- Environment: torch + CUDA; wandb optional (`use_wandb` in configs).
+- Environment: torch + CUDA.
+- **wandb** (`use_wandb: true` in every config): all cells log to one shared
+  project `wandb_project` (default `worldsgg-v2`), each run named by
+  `experiment_name` and grouped by `method_name`, so the ladder and plugin
+  tiers overlay on one dashboard. **Before a multi-process launch, authenticate
+  once** (`wandb login` or `export WANDB_API_KEY=…`) — an unauthenticated
+  `wandb.init` can block on a prompt and hang every concurrent slot. To skip
+  the network entirely: `export WANDB_MODE=offline`, or set `use_wandb: false`
+  (metrics still land in `results/*_metrics.jsonl`, the source of truth).
 
 ## 1. One-time feature extraction (per backbone × mode)
 

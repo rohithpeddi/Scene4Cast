@@ -37,6 +37,7 @@ grad_clip: 5.0
 optimizer: adamw
 bce_loss: true
 use_wandb: true
+wandb_project: worldsgg-v2
 use_amp: true
 log_every: 100
 include_invisible: true

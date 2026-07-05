@@ -70,6 +70,7 @@ def load_wsgg_config(yaml_path: str = None) -> SimpleNamespace:
     parser.add_argument("--lambda_vlm", default=None, type=float)
     parser.add_argument("--label_smoothing_vlm", default=None, type=float)
     parser.add_argument("--use_wandb", action="store_true", default=None)
+    parser.add_argument("--wandb_project", default=None, type=str)
     parser.add_argument("--use_amp", action="store_true", default=None)
     parser.add_argument("--datasize", default=None, type=str)
 
@@ -184,9 +185,15 @@ class WSGGBase:
             logger.info(f"  Mode      : {self._conf.mode}")
             logger.info("━" * 60)
 
-        # WandB
+        # WandB — one shared project, each grid cell a comparable run
+        # (grouped by method so the ladder / tiers overlay on one chart).
         if self._enable_wandb:
-            wandb.init(project=self._experiment_name, config=self._conf.args)
+            wandb.init(
+                project=getattr(self._conf, 'wandb_project', 'worldsgg-v2'),
+                name=self._experiment_name,
+                group=getattr(self._conf, 'method_name', None),
+                config=self._conf.args,
+            )
 
         logger.info("─── Configuration ───")
         for k, v in sorted(self._conf.args.items()):
