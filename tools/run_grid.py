@@ -39,7 +39,7 @@ MODES = ["predcls", "sgdet"]
 TIERS = ["plus1", "plus2", "plus3", "plus3pe", "noema",
          "tau025", "tau05", "tau075",
          "notau", "lowmask", "nomask", "novlm", "nomotion", "noego",
-         "v2a", "v2b", "v2c", "v2d",
+         "v2a", "v2b", "v2c", "v2d", "v2e", "v2f",
          "conf", "proto", "xobj", "energy"]
 METHODS_BACKBONE = "resnet50"  # baselines exist only here; worldwise everywhere
 

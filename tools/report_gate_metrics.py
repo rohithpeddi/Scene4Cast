@@ -56,6 +56,8 @@ TIER_INFO = {
     "v2b":      ("base", "v2 candidate: I-1 + tau=0.5 + mask=0.1"),
     "v2c":      ("base", "v2 candidate: I-1 + tau=0.25 + mask=0.1"),
     "v2d":      ("base", "v2 candidate: v2b + lambda_vlm=0"),
+    "v2e":      ("base", "v2 refinement: I-1 + tau=0.5 + lambda_vlm=0, mask 0.3"),
+    "v2f":      ("base", "v2 refinement: I-1 + tau=0.75 + lambda_vlm=0, mask 0.3"),
     "conf":    ("base",  "contacting mR on unseen pairs (I-5)"),
     "proto":   ("base",  "contacting mR (I-6 prototypes)"),
     "xobj":    ("base",  "occpair (masked-pair) R/mR (I-7)"),

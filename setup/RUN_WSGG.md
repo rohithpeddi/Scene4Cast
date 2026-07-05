@@ -82,21 +82,28 @@ python tools/run_grid_multigpu.py --gpus 0 1 2 --compute-priors
 
 One worker per GPU pulls from a shared, priority-ordered queue:
 
-| Priority | Stage | Cells | Purpose |
-|---|---|---|---|
-| 1 | `table_a` | 5 methods × resnet50 × 2 modes (10) | Method-comparison table |
-| 2 | `scaling` | worldwise × dinov2b/2l/3l × 2 modes (6) | Backbone scaling + tier I-0 ref |
-| 3 | `stage_a` | plus1/plus2/plus3/noema @ dinov3l (8) | Cumulative plugin ladder + EMA A/B |
-| 4 | `tune` | tau025/tau05/tau075 + plus3pe @ dinov3l (8) | Round-1 follow-ups: τ sweep + I-3 retry |
-| 5 | `subtract` | notau/lowmask/nomask/novlm/nomotion/noego @ dinov3l (12) | Subtraction study — what to REMOVE |
-| 6 | `v2` | v2a/v2b/v2c/v2d × {resnet50, dinov3l} × 2 modes (16) | Recomposition candidates → the final ladder row |
-| 7 | `stage_b` | conf/proto/xobj/energy @ dinov3l (8) | Research plugins — gate on Stage A first |
+**Post round-2, the default schedule is trimmed to what still matters**
+(completed cells are skip-detected, so the default command re-runs nothing):
+
+| Stage | Cells | Status |
+|---|---|---|
+| `table_a` | 5 methods × resnet50 × 2 modes (10) | ACTIVE — the ladder table |
+| `scaling` | worldwise × dinov2b/2l/3l × 2 modes (6) | ACTIVE — Table B + tier I-0 ref |
+| `v2` | v2a…v2f × {resnet50, dinov3l} × 2 modes (24) | ACTIVE — final-ladder candidates (v2e/v2f are the live ones) |
+| `stage_a` | plus1/2/3 + noema (8) | RETIRED — verdicts logged (plus1 KEEP, rest DROP) |
+| `tune` | τ sweep + plus3pe (8) | RETIRED — answered by v2 differencing |
+| `subtract` | notau/lowmask/… (12) | RETIRED — answered; nomotion/noego optional |
+| `stage_b` | conf/proto/xobj/energy (8) | RETIRED — all failed the gate (proto catastrophic) |
+
+Retired stages still run if named explicitly (`--stages subtract`) — the
+launcher prints why they were retired.
 
 Final tables once a v2 winner is chosen (winner also needs dinov2b/2l runs via
-`python tools/run_grid.py --methods worldwise --tiers v2b --backbones dinov2b dinov2l`):
+`python tools/run_grid.py --methods worldwise --tiers v2e --backbones dinov2b dinov2l`):
 
 ```bash
-python tools/aggregate_results.py --mode predcls --tiers --v2 v2b   # ladder row + v2 scaling
+python tools/aggregate_results.py --mode predcls --tiers --v2 v2e   # ladder row + v2 scaling
+python tools/report_gate_metrics.py --mode predcls                  # occpair check on λ_vlm=0
 ```
 
 - Per-run logs: `logs/grid/<experiment>.log`; live status:

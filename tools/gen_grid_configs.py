@@ -179,12 +179,19 @@ WW_PLUS_TIERS = {
             "p_mask_visible": 0.1},
     "v2d": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5,
             "p_mask_visible": 0.1, "lambda_vlm": 0.0},
+    # Round-2 refinements (see ROUND2_RESULTS_ANALYSIS.md §2): v2d won but
+    # carries the mask=0.1 choice that v2a↔v2b showed costs ~5 mR. These keep
+    # the λ_vlm=0 win and restore full masking; v2f pushes τ for more mR.
+    "v2e": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5,
+            "lambda_vlm": 0.0},
+    "v2f": {"use_pair_geometry": True, "logit_adjustment_tau": 0.75,
+            "lambda_vlm": 0.0},
 }
 
 # v2 candidates compete for the FINAL ladder, so unlike diagnostic tiers they
 # are generated at every backbone: the ladder table lives at resnet50 and the
 # winner also fills Table B (all backbones).
-V2_CANDIDATES = ["v2a", "v2b", "v2c", "v2d"]
+V2_CANDIDATES = ["v2a", "v2b", "v2c", "v2d", "v2e", "v2f"]
 
 
 def fmt(v):

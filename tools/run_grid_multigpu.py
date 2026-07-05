@@ -17,13 +17,15 @@ Campaign structure (July 2026): baselines run ONLY at resnet50 (the common
 backbone for the method-comparison table); WorldWise runs at all 4 backbones
 (the scaling story); WorldWise⁺ tiers run at the hero backbone (dinov3l).
 
-Queue order (highest priority first — the decision-critical cells finish first):
-  1. table_a  — 5 methods @ resnet50, both modes         (method comparison, 10)
-  2. scaling  — worldwise @ dinov2b/dinov2l/dinov3l      (Table B + tier I-0 ref, 6)
-  3. stage_a  — worldwise plus1/plus2/plus3 + noema @ dinov3l  (plugin ladder, 8)
-  4. tune     — tau025/tau05/tau075 + plus3pe @ dinov3l   (round-1 follow-ups, 8)
-  5. stage_b  — conf/proto/xobj/energy @ dinov3l          (research plugins, 8)
-     (interpret AFTER the Stage-A gate — they run last so you can stop early)
+DEFAULT schedule (post round-2, only what still matters — completed cells are
+skip-detected so re-running the same command costs nothing):
+  1. table_a  — 5 methods @ resnet50, both modes            (method comparison, 10)
+  2. scaling  — worldwise @ dinov2b/dinov2l/dinov3l         (Table B + tier I-0 ref, 6)
+  3. v2       — v2a..v2f @ {resnet50, dinov3l}, both modes  (final-ladder candidates, 24)
+
+RETIRED stages (answered/failed — run only by naming them in --stages):
+  stage_a (verdicts logged) · tune (answered by v2 differencing) ·
+  subtract (answered; nomotion/noego optional) · stage_b (all failed the gate)
 
 Each run's stdout/stderr goes to logs/grid/<experiment>.log; a status line is
 appended to results/grid_run_status.csv as runs finish. Already-completed runs
@@ -70,10 +72,25 @@ SUBTRACT_TIERS = ["notau", "lowmask", "nomask", "novlm", "nomotion", "noego"]
 # Round-2 recomposition candidates — run at the LADDER backbone (resnet50,
 # where Table A lives) AND the hero backbone; the winner then scales to the
 # remaining backbones via run_grid.py.
-V2_TIERS = ["v2a", "v2b", "v2c", "v2d"]
+V2_TIERS = ["v2a", "v2b", "v2c", "v2d", "v2e", "v2f"]
 V2_BACKBONES = [METHODS_BACKBONE, HERO]
 STAGE_B_TIERS = ["conf", "proto", "xobj", "energy"]
 STAGES = ["table_a", "scaling", "stage_a", "tune", "subtract", "v2", "stage_b"]
+
+# What still matters (round-2 verdicts, docs/ROUND2_RESULTS_ANALYSIS.md):
+# the final ladder needs the base tables + the v2 candidates only. Completed
+# cells are skip-detected, so the default schedule re-runs nothing.
+DEFAULT_STAGES = ["table_a", "scaling", "v2"]
+
+# Retired stages — answered or failed; runnable only via explicit --stages.
+RETIRED = {
+    "stage_a":  "complete; verdicts logged (plus1 KEEP, plus2/plus3 DROP, noema neutral)",
+    "tune":     "answered by v2 candidate differencing (τ knee ∈ [0.5, 0.75]; "
+                "plus3pe only matters if I-3 is ever revisited)",
+    "subtract": "lowmask/nomask/novlm/notau answered by v2a–d differencing; "
+                "nomotion/noego optional for a components table, not ladder-blocking",
+    "stage_b":  "all four plugins failed the round-2 gate (proto catastrophic)",
+}
 
 
 def read_config_fields(cfg_path):
@@ -213,8 +230,10 @@ def main():
                     help="GPU ids to use")
     ap.add_argument("--per-gpu", type=int, default=3,
                     help="concurrent training processes per GPU (default 3)")
-    ap.add_argument("--stages", nargs="+", default=STAGES, choices=STAGES,
-                    help="which campaign stages to schedule")
+    ap.add_argument("--stages", nargs="+", default=DEFAULT_STAGES, choices=STAGES,
+                    help="stages to schedule (default = the decision-critical "
+                         f"set {DEFAULT_STAGES}; retired stages must be named "
+                         "explicitly)")
     ap.add_argument("--modes", nargs="+", default=MODES, choices=MODES)
     ap.add_argument("--data_path", default="/data/rohith/ag")
     ap.add_argument("--compute-priors", action="store_true",
@@ -224,6 +243,10 @@ def main():
                     help="re-run cells even if their final epoch is logged")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    for s in args.stages:
+        if s in RETIRED:
+            print(f"NOTE: stage '{s}' is retired — {RETIRED[s]}")
 
     py = sys.executable
 

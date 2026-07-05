@@ -35,7 +35,7 @@ METHODS_BACKBONE = "resnet50"  # the only backbone all 5 methods share
 TIERS = ["plus1", "plus2", "plus3", "plus3pe", "noema",
          "tau025", "tau05", "tau075",
          "notau", "lowmask", "nomask", "novlm", "nomotion", "noego",
-         "v2a", "v2b", "v2c", "v2d",
+         "v2a", "v2b", "v2c", "v2d", "v2e", "v2f",
          "conf", "proto", "xobj", "energy"]
 
 
@@ -126,7 +126,7 @@ def main():
                     help="experiment-name version suffix (v1 = pre-fix legacy)")
     ap.add_argument("--tiers", action="store_true",
                     help="also render Table C (WorldWise⁺ plugin ladder)")
-    ap.add_argument("--v2", default=None, choices=["v2a", "v2b", "v2c", "v2d"],
+    ap.add_argument("--v2", default=None, choices=["v2a", "v2b", "v2c", "v2d", "v2e", "v2f"],
                     help="append this recomposition candidate to Table A as "
                          "worldwise-v2 (reads worldwise_<cand>_<mode>_resnet50) "
                          "and use it for Table B across backbones")
