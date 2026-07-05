@@ -99,6 +99,15 @@ class TemporalObjectEncoder(nn.Module):
         # Padding mask for transformer: True = IGNORE
         padding_mask = ~mask_nt  # (N, T) — True = ignore
 
+        # Failsafe: an object slot that is padding in EVERY frame has a fully
+        # masked row → softmax over all -inf → NaN, which then leaks through
+        # later masked attention (0 * NaN = NaN). Temporarily unmask its first
+        # timestep; the strict zeroing below discards the (now finite) output.
+        all_masked = padding_mask.all(dim=1)  # (N,)
+        if all_masked.any():
+            padding_mask = padding_mask.clone()
+            padding_mask[all_masked, 0] = False
+
         # Self-attend: each object slot attends over its temporal sequence
         # batch_first=True, so input is (N, T, D)
         enriched_nt = self.encoder(
@@ -109,7 +118,8 @@ class TemporalObjectEncoder(nn.Module):
         # Transpose back to (T, N, D)
         enriched = enriched_nt.permute(1, 0, 2)  # (T, N, D)
 
-        # Zero out padding positions
-        enriched = enriched * valid_mask.unsqueeze(-1).float()
+        # Zero out padding positions — masked_fill (not * mask) so any residual
+        # non-finite value in a padded slot is cleared rather than propagated.
+        enriched = enriched.masked_fill(~valid_mask.unsqueeze(-1), 0.0)
 
         return enriched
