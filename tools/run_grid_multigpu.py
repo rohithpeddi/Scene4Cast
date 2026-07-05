@@ -2,9 +2,16 @@
 Multi-GPU launcher for the full WorldSGG campaign.
 
 Distributes every training cell over the available GPUs with a shared work
-queue: one worker per GPU, each pinning its runs via CUDA_VISIBLE_DEVICES, so
-all GPUs stay busy until the queue drains (no static per-GPU split that leaves
-a GPU idle when its share finishes early).
+queue: `--per-gpu` worker slots per GPU (default 3), each pinning its runs via
+CUDA_VISIBLE_DEVICES, all pulling from one queue so every slot stays busy until
+the queue drains (no static split that leaves a slot idle when its share
+finishes early). Total concurrency = len(gpus) x per_gpu.
+
+WSGG runs are small (batch_size=1, a light model on top of pre-extracted
+features), so a single training process underuses a modern GPU — packing
+several per GPU is the intended throughput mode. Each process still holds its
+own copy of the feature set in RAM, so watch host memory: peak ≈
+(gpus x per_gpu) feature sets resident at once.
 
 Campaign structure (July 2026): baselines run ONLY at resnet50 (the common
 backbone for the method-comparison table); WorldWise runs at all 4 backbones
@@ -23,11 +30,14 @@ appended to results/grid_run_status.csv as runs finish. Already-completed runs
 re-run after interruptions.
 
 Usage (on the training server):
-    # everything: base grid + all tiers, priors computed first (32 runs)
-    python tools/run_grid_multigpu.py --gpus 0 1 2 --compute-priors
+    # everything: base grid + all tiers, 3 GPUs x 3 slots = 9 concurrent (32 runs)
+    python tools/run_grid_multigpu.py --gpus 0 1 2 --per-gpu 3 --compute-priors
 
     # only the decision-critical cells (method table + scaling + Stage A)
     python tools/run_grid_multigpu.py --gpus 0 1 2 --stages table_a scaling stage_a
+
+    # one run per GPU (e.g. if memory is tight)
+    python tools/run_grid_multigpu.py --gpus 0 1 2 --per-gpu 1
 
     # see the schedule without launching
     python tools/run_grid_multigpu.py --gpus 0 1 2 --dry-run
@@ -119,7 +129,8 @@ def build_schedule(args):
     return cells
 
 
-def worker(gpu_id, work_q, status, lock, py, dry_run):
+def worker(gpu_id, slot, work_q, status, lock, py, dry_run):
+    tag = f"gpu{gpu_id}.{slot}"
     while True:
         try:
             item = work_q.get_nowait()
@@ -133,7 +144,7 @@ def worker(gpu_id, work_q, status, lock, py, dry_run):
         log_path = os.path.join(log_dir, f"{exp or stem}.log")
 
         with lock:
-            print(f"[gpu{gpu_id}] START {stage:8s} {stem}  → {log_path}")
+            print(f"[{tag}] START {stage:8s} {stem}  → {log_path}")
 
         t0 = time.time()
         if dry_run:
@@ -141,7 +152,7 @@ def worker(gpu_id, work_q, status, lock, py, dry_run):
         else:
             with open(log_path, "a", encoding="utf-8") as log_f:
                 log_f.write(f"\n===== launch {time.strftime('%Y-%m-%d %H:%M:%S')} "
-                            f"gpu={gpu_id} cfg={cfg} =====\n")
+                            f"gpu={gpu_id} slot={slot} cfg={cfg} =====\n")
                 log_f.flush()
                 rc = subprocess.run(
                     [py, "train_wsgg_methods.py", "--config", cfg],
@@ -152,7 +163,7 @@ def worker(gpu_id, work_q, status, lock, py, dry_run):
         result = "ok" if rc == 0 else f"FAILED(rc={rc})"
         with lock:
             status.append((stage, stem, mode, gpu_id, result, round(dt, 1)))
-            print(f"[gpu{gpu_id}] DONE  {stage:8s} {stem}  {result} in {dt:.1f} min")
+            print(f"[{tag}] DONE  {stage:8s} {stem}  {result} in {dt:.1f} min")
             _write_status_csv(status)
         work_q.task_done()
 
@@ -170,7 +181,9 @@ def _write_status_csv(status):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gpus", nargs="+", type=int, default=[0, 1, 2],
-                    help="GPU ids to use (one worker per id)")
+                    help="GPU ids to use")
+    ap.add_argument("--per-gpu", type=int, default=3,
+                    help="concurrent training processes per GPU (default 3)")
     ap.add_argument("--stages", nargs="+", default=STAGES, choices=STAGES,
                     help="which campaign stages to schedule")
     ap.add_argument("--modes", nargs="+", default=MODES, choices=MODES)
@@ -210,7 +223,10 @@ def main():
             continue
         schedule.append((stage, stem, mode, cfg, exp))
 
+    per_gpu = max(1, args.per_gpu)
+    n_slots = len(args.gpus) * per_gpu
     print(f"\nSchedule: {len(schedule)} runs on GPUs {args.gpus} "
+          f"x {per_gpu} slots = {n_slots} concurrent "
           f"({len(skipped)} already complete, {len(missing)} configs missing)")
     for stage, stem, mode, cfg, exp in schedule:
         print(f"  {stage:8s} | {stem}")
@@ -232,11 +248,15 @@ def main():
     for item in schedule:
         work_q.put(item)
 
+    # per_gpu worker slots per GPU, all pinned to that GPU, all sharing the queue
     status, lock = [], threading.Lock()
     threads = [
-        threading.Thread(target=worker, args=(g, work_q, status, lock, py, False),
-                         daemon=True)
+        threading.Thread(
+            target=worker, args=(g, slot, work_q, status, lock, py, False),
+            name=f"gpu{g}.{slot}", daemon=True,
+        )
         for g in args.gpus
+        for slot in range(per_gpu)
     ]
     t_start = time.time()
     for t in threads:
