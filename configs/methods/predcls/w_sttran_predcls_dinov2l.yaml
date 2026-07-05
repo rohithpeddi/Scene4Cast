@@ -49,4 +49,4 @@ method_name: w_sttran
 mode: predcls
 feature_model: dinov2l
 task_name: worldsgg
-experiment_name: w_sttran_predcls_dinov2l_v1
+experiment_name: w_sttran_predcls_dinov2l_v2

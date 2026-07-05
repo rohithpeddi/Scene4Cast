@@ -6,6 +6,7 @@ train_wsgg_base.py) for every grid cell and emits:
 
   Table A — method comparison at a fixed (hero) backbone   [rows = ladder]
   Table B — backbone scaling for WorldWise                 [rows = backbones]
+  Table C — WorldWise⁺ plugin ladder at the hero backbone  [--tiers]
 
 For each cell we select one epoch (default: the epoch with the best
 With-Constraint R@20, matching the checkpoint-selection metric) and read all
@@ -13,7 +14,7 @@ metrics from it. The column maximum in each table is **bold**.
 
 Also writes a wide CSV (results/grid_summary_<mode>.csv) with every cell.
 
-    python tools/aggregate_results.py --mode predcls --hero-backbone dinov3l
+    python tools/aggregate_results.py --mode predcls --hero-backbone dinov3l --tiers
 """
 
 import argparse
@@ -25,6 +26,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
+# Stage-A cumulative ladder + A/B + Stage-B research plugins
+# (must match WW_PLUS_TIERS in tools/gen_grid_configs.py)
+TIERS = ["plus1", "plus2", "plus3", "noema", "conf", "proto", "xobj", "energy"]
 KS = [10, 20, 50]
 METRIC_COLS = (
     [f"wc/R@{k}" for k in KS] + [f"wc/mR@{k}" for k in KS]
@@ -32,21 +36,33 @@ METRIC_COLS = (
 )
 
 
-def load_cell(results_dir, method, mode, backbone, select, sel_metric):
-    path = os.path.join(results_dir, f"{method}_{mode}_{backbone}_v1_metrics.jsonl")
+def load_exp(results_dir, stem, select, sel_metric):
+    """Load one experiment's metric rows; stem = '<name>_<mode>_<backbone>_<ver>'."""
+    path = os.path.join(results_dir, f"{stem}_metrics.jsonl")
     if not os.path.exists(path):
         return None
     rows = []
     with open(path) as f:
         for line in f:
             line = line.strip()
-            if line:
-                rows.append(json.loads(line))
+            if not line:
+                continue
+            row = json.loads(line)
+            # Skip run-identity header rows (written once per run)
+            if row.get("type") == "header" or "epoch" not in row:
+                continue
+            rows.append(row)
     if not rows:
         return None
     if select == "last":
         return rows[-1]
     return max(rows, key=lambda r: r.get(sel_metric, 0.0))
+
+
+def load_cell(results_dir, method, mode, backbone, select, sel_metric, version):
+    return load_exp(
+        results_dir, f"{method}_{mode}_{backbone}_{version}", select, sel_metric,
+    )
 
 
 def render_table(title, row_labels, row_keys, cells, constraint):
@@ -88,6 +104,10 @@ def main():
     ap.add_argument("--hero-backbone", default="dinov3l", choices=BACKBONES)
     ap.add_argument("--select", default="best", choices=["best", "last"])
     ap.add_argument("--sel-metric", default="wc/R@20")
+    ap.add_argument("--version", default="v2",
+                    help="experiment-name version suffix (v1 = pre-fix legacy)")
+    ap.add_argument("--tiers", action="store_true",
+                    help="also render Table C (WorldWise⁺ plugin ladder)")
     args = ap.parse_args()
 
     # Load every cell
@@ -96,6 +116,7 @@ def main():
         for b in BACKBONES:
             grid[(m, b)] = load_cell(
                 args.results_dir, m, args.mode, b, args.select, args.sel_metric,
+                args.version,
             )
 
     # ---- CSV dump ----
@@ -123,6 +144,23 @@ def main():
     b_cells = {b: grid[("worldwise", b)] for b in BACKBONES}
     print(render_table("Table B · WorldWise backbone scaling", BACKBONES, BACKBONES, b_cells, "wc"))
     print(render_table("Table B · WorldWise backbone scaling", BACKBONES, BACKBONES, b_cells, "nc"))
+
+    # ---- Table C: WorldWise⁺ plugin ladder at the hero backbone ----
+    if args.tiers:
+        hero = args.hero_backbone
+        c_keys = ["base"] + TIERS
+        c_labels = [f"worldwise (I-0)"] + [f"worldwise+{t}" for t in TIERS]
+        c_cells = {"base": grid[("worldwise", hero)]}
+        for t in TIERS:
+            c_cells[t] = load_exp(
+                args.results_dir,
+                f"worldwise_{t}_{args.mode}_{hero}_{args.version}",
+                args.select, args.sel_metric,
+            )
+        print(render_table(f"Table C · WorldWise⁺ plugin ladder @ {hero}",
+                           c_labels, c_keys, c_cells, "wc"))
+        print(render_table(f"Table C · WorldWise⁺ plugin ladder @ {hero}",
+                           c_labels, c_keys, c_cells, "nc"))
 
     print(f"\nCSV → {csv_path}")
 

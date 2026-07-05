@@ -108,6 +108,19 @@ class BasicSceneGraphEvaluator:
         self.result_dict[self.mode + '_mean_recall_collect'] = {
             k: [[] for _ in range(self.num_rel)] for k in (10, 20, 50, 100)
         }
+
+    def fetch_per_predicate_recall(self, k=20):
+        """Per-predicate recall vector at K=k (decision-log artifact).
+
+        Returns:
+            dict {predicate_name: mean recall} — 0.0 for predicates never
+            seen in GT during this evaluation window.
+        """
+        collect = self.result_dict[self.mode + '_mean_recall_collect'][k]
+        return {
+            self.AG_all_predicates[i]: (float(np.mean(v)) if v else 0.0)
+            for i, v in enumerate(collect)
+        }
     
     def fetch_stats_json(self, save_file_path=None):
         recall_dict = {}

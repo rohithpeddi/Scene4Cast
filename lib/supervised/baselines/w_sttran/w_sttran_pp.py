@@ -31,10 +31,10 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-from lib.supervised.worldsgg.lks_buffer.lks_memory import vectorized_lks_buffer
-from lib.supervised.worldsgg.lks_buffer.lks_tokenizer import LKSTokenizer
+from lib.supervised.baselines.lks_buffer.lks_memory import vectorized_lks_buffer
+from lib.supervised.baselines.lks_buffer.lks_tokenizer import LKSTokenizer
 
-from lib.supervised.worldsgg.worldsgg_base import (
+from lib.supervised.components import (
     GlobalStructuralEncoder, NodePredictor, RelationshipPredictor,
     SpatialGNN as InterObjectTransformer,
     CameraPoseEncoder as ObjectSpatialEncoder,
@@ -98,13 +98,13 @@ class WSTTranPP(nn.Module):
             dropout=config.dropout,
         )
 
-        # Module 7: Node predictor
+        # Module 5: Node predictor
         self.node_predictor = NodePredictor(
             d_memory=config.d_model,
             num_classes=num_object_classes,
         )
 
-        # Module 8: Relationship predictor
+        # Module 6: Relationship predictor
         clip_path = getattr(config, 'clip_embeddings_path', '')
         clip_path = Path(config.data_path) / clip_path if clip_path else None
         self.rel_predictor = RelationshipPredictor(
@@ -121,7 +121,7 @@ class WSTTranPP(nn.Module):
             dropout=config.dropout,
         )
 
-        # Module 9: Temporal edge attention
+        # Module 7: Temporal edge attention
         self.temporal_edge_attn = TemporalEdgeAttention(
             d_rel=config.d_rel,
             n_heads=config.n_rel_heads,
@@ -140,6 +140,7 @@ class WSTTranPP(nn.Module):
         pair_valid: torch.Tensor,
         camera_pose_seq: Optional[torch.Tensor] = None,
         union_features_seq: Optional[torch.Tensor] = None,
+        node_labels_seq: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Process a full video in a single batched forward pass.
@@ -197,21 +198,22 @@ class WSTTranPP(nn.Module):
             valid_mask=valid_mask_seq,
         )
 
-        # ==================== Step 8: Node prediction ====================
+        # ==================== Step 6: Node prediction ====================
         node_logits_all = self.node_predictor(enriched_all)
 
-        # ==================== Step 9: Edge prediction ====================
+        # ==================== Step 7: Edge prediction ====================
         rel_tokens, pair_valid_out = self.rel_predictor.batched_form_and_attend(
             enriched_all, node_logits_all, person_idx_seq, object_idx_seq,
             pair_valid, union_features_seq,
+            node_class_override=node_labels_seq,
         )
 
-        # ==================== Step 10: Temporal edge attention ====================
+        # ==================== Step 8: Temporal edge attention ====================
         enriched_rel = self.temporal_edge_attn(
             rel_tokens, pair_valid_out, person_idx_seq, object_idx_seq,
         )
 
-        # ==================== Step 11: Predict distributions ====================
+        # ==================== Step 9: Predict distributions ====================
         edge_out = self.rel_predictor.batched_predict(enriched_rel, pair_valid_out)
 
         return {

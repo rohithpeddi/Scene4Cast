@@ -98,6 +98,58 @@ class TrainWSGGBase(WSGGBase):
             logger.info(f"  Train: {len(self._train_dataset)} items | Test: SKIPPED")
 
     # ------------------------------------------------------------------
+    # Run identity (decision-log artifact)
+    # ------------------------------------------------------------------
+    def _results_log_path(self):
+        results_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "results"
+        )
+        os.makedirs(results_dir, exist_ok=True)
+        return os.path.join(
+            results_dir, f"{self._conf.experiment_name}_metrics.jsonl"
+        )
+
+    def _write_run_header(self):
+        """One identity row per run in the metrics jsonl: git commit, config
+        (incl. all plugin flags), param counts. Without this, results can't be
+        traced to a code state when the next refinement round is decided."""
+        import subprocess
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                stderr=subprocess.DEVNULL, text=True,
+            ).strip()
+        except Exception:
+            commit = "unknown"
+
+        n_total = sum(p.numel() for p in self._model.parameters())
+        n_train = sum(p.numel() for p in self._model.parameters() if p.requires_grad)
+
+        # JSON-safe copy of the config (drop non-serializable values)
+        conf_args = {}
+        for k, v in self._conf.args.items():
+            if isinstance(v, (str, int, float, bool)) or v is None:
+                conf_args[k] = v
+
+        header = {
+            "type": "header",
+            "experiment": self._conf.experiment_name,
+            "git_commit": commit,
+            "method": self._conf.method_name,
+            "mode": self._conf.mode,
+            "backbone": getattr(self._conf, "feature_model", "unknown"),
+            "seed": int(getattr(self._conf, "seed", 0)),
+            "starting_epoch": self._starting_epoch,
+            "params_total": n_total,
+            "params_trainable": n_train,
+            "config": conf_args,
+        }
+        with open(self._results_log_path(), "a") as f:
+            f.write(json.dumps(header) + "\n")
+        logger.info(f"Run header written (commit {commit}, {n_total:,} params)")
+
+    # ------------------------------------------------------------------
     # Training Loop
     # ------------------------------------------------------------------
     def _train_model(self):
@@ -123,6 +175,8 @@ class TrainWSGGBase(WSGGBase):
             train_iter = iter(self._dataloader_train)
             tr = []
             start_time = time.time()
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
 
             for batch_idx in tqdm(range(len(self._dataloader_train)), desc=f"Epoch {epoch + 1}/{self._conf.nepoch}"):
                 batch = next(train_iter)
@@ -183,14 +237,22 @@ class TrainWSGGBase(WSGGBase):
             # Save full-state checkpoint
             self._save_checkpoint(epoch)
 
+            # Epoch cost + loss aggregates (logged into the metrics row)
+            epoch_time = time.time() - start_time
+            peak_vram_gb = (
+                torch.cuda.max_memory_allocated() / 1e9
+                if torch.cuda.is_available() else 0.0
+            )
+            epoch_losses = pd.concat(tr, axis=1).mean(1) if tr else pd.Series()
+
             # End-of-epoch evaluation (skip if no test dataset)
             if self._dataloader_test is not None:
-                score = self._evaluate_after_epoch(epoch)
+                score = self._evaluate_after_epoch(
+                    epoch, epoch_losses=epoch_losses,
+                    epoch_time=epoch_time, peak_vram_gb=peak_vram_gb,
+                )
             else:
                 score = 0.0
-
-            # Epoch-level WandB logging
-            epoch_losses = pd.concat(tr, axis=1).mean(1) if tr else pd.Series()
             if self._enable_wandb:
                 wandb_epoch = {"epoch": epoch + 1}
                 for k, v in epoch_losses.items():
@@ -207,7 +269,9 @@ class TrainWSGGBase(WSGGBase):
                 logger.info(f"  Avg losses: {dict(epoch_losses.round(4))}")
             logger.info(f"{'═' * 60}")
 
-    def _evaluate_after_epoch(self, epoch: int) -> float:
+    def _evaluate_after_epoch(
+        self, epoch: int, epoch_losses=None, epoch_time=0.0, peak_vram_gb=0.0,
+    ) -> float:
         """Run test evaluation after each epoch. Returns score for scheduler."""
         from lib.supervised.evaluation_recall import evaluate_wsgg_video
 
@@ -272,6 +336,29 @@ class TrainWSGGBase(WSGGBase):
                         mode=self._conf.mode, verbose=False,
                     )
 
+                    # Occlusion-stratified split: pairs whose BOTH endpoints
+                    # are visible vs pairs with an unseen endpoint. Filtering
+                    # pair_valid is enough — GT and preds are both derived
+                    # from it inside evaluate_wsgg_video.
+                    if self._evaluator_vis is not None:
+                        vis_last = batch["visibility_mask"][last].numpy().astype(bool)
+                        n_max = len(vis_last)
+                        p_idx = np.clip(pred_pkl["person_idx"], 0, n_max - 1)
+                        o_idx = np.clip(pred_pkl["object_idx"], 0, n_max - 1)
+                        pair_visible = vis_last[p_idx] & vis_last[o_idx]
+                        pv = pred_pkl["pair_valid"].astype(bool)
+
+                        pkl_vis = dict(pred_pkl, pair_valid=(pv & pair_visible))
+                        pkl_occ = dict(pred_pkl, pair_valid=(pv & ~pair_visible))
+                        evaluate_wsgg_video(
+                            pkl_vis, self._evaluator_vis,
+                            mode=self._conf.mode, verbose=False,
+                        )
+                        evaluate_wsgg_video(
+                            pkl_occ, self._evaluator_occ,
+                            mode=self._conf.mode, verbose=False,
+                        )
+
         if self._evaluator is not None:
             # --- With-constraint metrics ---
             stats_wc = self._evaluator.fetch_stats_json()
@@ -306,13 +393,7 @@ class TrainWSGGBase(WSGGBase):
                 wandb.log(wandb_metrics)
 
             # Save metrics to results log file
-            results_dir = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "results"
-            )
-            os.makedirs(results_dir, exist_ok=True)
-            log_path = os.path.join(
-                results_dir, f"{self._conf.experiment_name}_metrics.jsonl"
-            )
+            log_path = self._results_log_path()
             row = {"epoch": epoch + 1}
             for k in [10, 20, 50, 100]:
                 row[f"wc/R@{k}"] = round(r_wc.get(k, 0.0), 6)
@@ -321,12 +402,45 @@ class TrainWSGGBase(WSGGBase):
                 row[f"nc/R@{k}"] = round(r_nc.get(k, 0.0), 6)
                 row[f"nc/mR@{k}"] = round(mr_nc.get(k, 0.0), 6)
                 row[f"nc/hR@{k}"] = round(hr_nc.get(k, 0.0), 6)
+
+            # Per-predicate recall vector (wc, K=20) — tail-behavior heatmaps
+            row["wc/per_predicate_R@20"] = {
+                name: round(v, 6)
+                for name, v in self._evaluator.fetch_per_predicate_recall(20).items()
+            }
+
+            # Occlusion-stratified metrics (wc) — the MWAE story, measured
+            if self._evaluator_vis is not None:
+                stats_vis = self._evaluator_vis.fetch_stats_json()
+                stats_occ = self._evaluator_occ.fetch_stats_json()
+                for k in [10, 20, 50]:
+                    row[f"vispair/R@{k}"] = round(stats_vis["recall"].get(k, 0.0), 6)
+                    row[f"vispair/mR@{k}"] = round(stats_vis["mean_recall"].get(k, 0.0), 6)
+                    row[f"occpair/R@{k}"] = round(stats_occ["recall"].get(k, 0.0), 6)
+                    row[f"occpair/mR@{k}"] = round(stats_occ["mean_recall"].get(k, 0.0), 6)
+                logger.info(
+                    f"  Occlusion split — visible pairs R@20: "
+                    f"{row.get('vispair/R@20', 0.0):.4f} | masked pairs R@20: "
+                    f"{row.get('occpair/R@20', 0.0):.4f}"
+                )
+
+            # Loss sub-terms + epoch cost — plugin effects show up here first
+            if epoch_losses is not None and len(epoch_losses) > 0:
+                for name, val in epoch_losses.items():
+                    if np.isfinite(val):
+                        row[f"loss/{name}"] = round(float(val), 6)
+            row["epoch_time_s"] = round(float(epoch_time), 1)
+            row["peak_vram_gb"] = round(float(peak_vram_gb), 2)
+
             with open(log_path, "a") as f:
                 f.write(json.dumps(row) + "\n")
             logger.info(f"📊 Metrics saved → {log_path}")
 
             self._evaluator.reset_result()
             self._evaluator_nc.reset_result()
+            if self._evaluator_vis is not None:
+                self._evaluator_vis.reset_result()
+                self._evaluator_occ.reset_result()
         else:
             score = 0.0
 
@@ -389,6 +503,9 @@ class TrainWSGGBase(WSGGBase):
 
         # 5. Resume from checkpoint (must come after optimizer/scheduler init)
         self._maybe_resume()
+
+        # 5b. Run-identity header (git commit + config + param counts)
+        self._write_run_header()
 
         # 6. Train
         logger.info("━" * 60)

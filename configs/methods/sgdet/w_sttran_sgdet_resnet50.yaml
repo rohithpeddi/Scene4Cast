@@ -49,4 +49,4 @@ method_name: w_sttran
 mode: sgdet
 feature_model: resnet50
 task_name: worldsgg
-experiment_name: w_sttran_sgdet_resnet50_v1
+experiment_name: w_sttran_sgdet_resnet50_v2

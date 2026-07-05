@@ -1,0 +1,1596 @@
+"""
+WSGG Shared Architectural Components
+======================================
+
+All reusable modules shared across WSGG methods live here.
+Method-specific modules (memory banks, tokenizers, retrievers) stay
+in their respective directories.
+
+Components:
+  1. GlobalStructuralEncoder — Flattened local-centered 3D bbox → tokens
+  2. SpatialPositionalEncoding — 3D geometry-aware PE
+  3. SpatialGNN — Transformer encoder with spatial PE
+  4. NodePredictor — Object class MLP
+  5. RelationshipPredictor — Unified edge prediction (visual+union+CLIP→self-attn→3 heads)
+  5b. TemporalEdgeAttention — Cross-temporal edge reasoning
+  6. CameraPoseEncoder — Camera extrinsic → viewpoint tokens
+  7. CameraTemporalEncoder — Full-temporal ego-motion self-attention
+  8. LabelSmoother — Soft targets for VLM pseudo-labels
+  9. MotionFeatureEncoder — 3D velocity/acceleration → d_motion tokens
+"""
+
+import logging
+import math
+from typing import Dict, List, Optional
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# 1. Global Structural Encoder
+# ============================================================================
+
+class GlobalStructuralEncoder(nn.Module):
+    """
+    Encodes world-frame 3D bounding boxes into per-object structural tokens
+    and a global summary token using flattened local-centered coordinates.
+
+    Each bounding box's 8 corners are centered (translation-invariant local
+    geometry) and flattened into a 24-dim vector, then concatenated with the
+    3D absolute center to form a 27-dim input. This preserves the full rigid
+    geometry (dimensions + orientation) that per-corner max-pooling discards.
+
+    The global max-pool over N objects remains appropriate because objects
+    in a scene ARE an unordered, variable-size set.
+
+    Input:  corners (B, N, 8, 3), valid_mask (B, N)
+    Output: object_tokens (B, N, d_struct), global_token (B, d_struct)
+    """
+
+    def __init__(self, d_struct: int = 256, d_hidden: int = 128):
+        super().__init__()
+        self.d_struct = d_struct
+
+        # Input: 24 local corner coords (8*3) + 3 absolute center = 27
+        self.object_mlp = nn.Sequential(
+            nn.Linear(27, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_hidden, d_hidden * 2),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(d_hidden * 2),
+            nn.Linear(d_hidden * 2, d_struct),
+        )
+
+        self.global_mlp = nn.Sequential(
+            nn.Linear(d_struct, d_struct),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(d_struct),
+            nn.Linear(d_struct, d_struct),
+        )
+
+    def forward(self, corners: torch.Tensor, valid_mask: torch.Tensor) -> tuple:
+        B, N, C, D = corners.shape
+        assert C == 8 and D == 3
+
+        # 1. Extract local geometry (translation-invariant box shape)
+        centers = corners.mean(dim=2, keepdim=True)               # (B, N, 1, 3)
+        local_corners = corners - centers                         # (B, N, 8, 3)
+
+        # 2. Flatten 8 local corners and concatenate absolute center
+        local_flat = local_corners.view(B, N, 24)                 # (B, N, 24)
+        x = torch.cat([local_flat, centers.squeeze(2)], dim=-1)   # (B, N, 27)
+
+        # 3. Encode full bounding box geometry at once
+        object_tokens = self.object_mlp(x)                        # (B, N, d_struct)
+        object_tokens = object_tokens.masked_fill(~valid_mask.unsqueeze(-1), 0.0)
+
+        # 4. Global pool over N objects (permutation-invariant set aggregation)
+        global_pool = object_tokens.masked_fill(~valid_mask.unsqueeze(-1), float("-inf"))
+        global_pool, _ = global_pool.max(dim=1)
+        # Belt-and-suspenders: if all objects are invalid, max over -inf → -inf.
+        # The all_invalid zeroing below handles it, but nan_to_num is a safety net.
+        global_pool = torch.nan_to_num(global_pool, nan=0.0, posinf=0.0, neginf=0.0)
+        all_invalid = ~valid_mask.any(dim=1, keepdim=True)
+        global_pool = global_pool.masked_fill(all_invalid, 0.0)
+        global_token = self.global_mlp(global_pool)
+
+        return object_tokens, global_token
+
+
+# ============================================================================
+# 2. Spatial Positional Encoding
+# ============================================================================
+
+class SpatialPositionalEncoding(nn.Module):
+    """
+    3D geometry-aware positional encodings from object bounding boxes.
+    Computes pairwise spatial features (distance, direction, volume ratio)
+    and aggregates into per-object encodings.
+
+    Input:  corners (B, N, 8, 3), valid_mask (B, N)
+    Output: spatial_pe (B, N, d_model)
+    """
+
+    def __init__(self, d_model: int = 256, d_hidden: int = 64):
+        super().__init__()
+        self.pair_mlp = nn.Sequential(
+            nn.Linear(5, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(inplace=True),
+        )
+        self.out_proj = nn.Linear(d_hidden, d_model)
+
+    def forward(self, corners: torch.Tensor, valid_mask: torch.Tensor) -> torch.Tensor:
+        # 1. Handle Batch Dimension Properly
+        B, N, C, D = corners.shape
+        assert C == 8 and D == 3, "Expected corners shape (B, N, 8, 3)"
+
+        # dim=2 corresponds to the 8 corners
+        centers = corners.mean(dim=2)  # (B, N, 3)
+
+        # Exact OBB volume from edge vectors (not AABB min/max which overestimates
+        # for rotated boxes). Corner ordering: 0-3 bottom face perimeter, 4-7 top
+        # face directly above (i.e., corner 4 is above corner 0).
+        edge_a = corners[:, :, 1] - corners[:, :, 0]   # (B, N, 3) perimeter edge
+        edge_b = corners[:, :, 3] - corners[:, :, 0]   # (B, N, 3) perimeter edge
+        edge_c = corners[:, :, 4] - corners[:, :, 0]   # (B, N, 3) vertical edge
+        len_a = torch.sqrt((edge_a ** 2).sum(dim=-1) + 1e-6)  # (B, N)
+        len_b = torch.sqrt((edge_b ** 2).sum(dim=-1) + 1e-6)  # (B, N)
+        len_c = torch.sqrt((edge_c ** 2).sum(dim=-1) + 1e-6)  # (B, N)
+        volumes = len_a * len_b * len_c                        # (B, N)
+        log_volumes = torch.log(volumes + 1e-6)                # (B, N)
+
+        # 2. Pairwise Relationships (Broadcasting over B and N)
+        # diff shape: (B, N, 1, 3) - (B, 1, N, 3) -> (B, N, N, 3)
+        # points FROM neighbor 'j' TO target 'i'
+        diff = centers.unsqueeze(2) - centers.unsqueeze(1)
+        
+        # CRITICAL FIX: Safe distance calculation (prevents NaN gradients)
+        dist = torch.sqrt((diff ** 2).sum(dim=-1, keepdim=True) + 1e-6) # (B, N, N, 1)
+        direction = diff / dist                                         # (B, N, N, 3)
+        
+        # Log volume ratio: log(Vi) - log(Vj)
+        log_vol_ratio = (log_volumes.unsqueeze(2) - log_volumes.unsqueeze(1)).unsqueeze(-1) # (B, N, N, 1)
+
+        # 3. Feed through MLP
+        pair_feats = torch.cat([dist, direction, log_vol_ratio], dim=-1) # (B, N, N, 5)
+        pair_encoded = self.pair_mlp(pair_feats)                         # (B, N, N, d_hidden)
+
+        # 4. Masking Out Invalid Object Pairs
+        # pair_valid shape: (B, N, 1) & (B, 1, N) -> (B, N, N)
+        pair_valid = valid_mask.unsqueeze(2) & valid_mask.unsqueeze(1)
+        pair_encoded = pair_encoded * pair_valid.unsqueeze(-1).float()
+
+        # 5. Aggregation
+        # Sum over the neighbor dimension (dim=2, or 'j')
+        n_valid = pair_valid.float().sum(dim=2, keepdim=True).clamp(min=1) # (B, N, 1)
+        agg = pair_encoded.sum(dim=2) / n_valid                            # (B, N, d_hidden)
+
+        # 6. Final Projection & Post-Masking
+        spatial_pe = self.out_proj(agg)                                    # (B, N, d_model)
+        
+        # STRICT MASKING: Ensure invalid objects don't output the linear layer bias
+        spatial_pe = spatial_pe.masked_fill(~valid_mask.unsqueeze(-1), 0.0)
+
+        return spatial_pe
+
+
+# ============================================================================
+# 3. Spatial GNN
+# ============================================================================
+
+class SpatialGNN(nn.Module):
+    """
+    Transformer encoder with 3D spatial positional encoding.
+    Context propagation based on geometric proximity.
+
+    Accepts batched (B, N, ...) inputs natively.
+    Invalid (padding) objects are excluded via src_key_padding_mask and
+    strictly zeroed out in the output.
+
+    Args:
+        d_model: Token / output dimension.
+        n_layers: Number of transformer encoder layers.
+        n_heads: Number of attention heads.
+        d_feedforward: FFN hidden dimension.
+        dropout: Dropout probability.
+
+    Input:  tokens (B, N, d_model), corners (B, N, 8, 3), valid_mask (B, N)
+    Output: enriched (B, N, d_model)
+    """
+
+    def __init__(
+        self,
+        d_model: int = 256,
+        n_layers: int = 4,
+        n_heads: int = 4,
+        d_feedforward: int = 512,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+
+        self.spatial_pe = SpatialPositionalEncoding(d_model=d_model)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_feedforward,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        # Final LayerNorm required for pre-norm architecture
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=n_layers,
+            norm=nn.LayerNorm(d_model),
+        )
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        corners: torch.Tensor,
+        valid_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        # 1. Spatial Positional Encoding (natively batched)
+        spatial_enc = self.spatial_pe(corners, valid_mask)  # (B, N, d_model)
+        x = tokens + spatial_enc
+
+        # 2. Padding mask: True = ignore for PyTorch transformer
+        padding_mask = ~valid_mask  # (B, N)
+
+        # 3. Failsafe: if an entire batch item is fully padded, MHA returns NaN.
+        #    Temporarily unmask the first token of that sequence.
+        all_invalid = padding_mask.all(dim=1)  # (B,)
+        if all_invalid.any():
+            padding_mask = padding_mask.clone()
+            padding_mask[all_invalid, 0] = False
+
+        # 4. Global attention / context propagation
+        x = self.transformer(x, src_key_padding_mask=padding_mask)
+
+        # 5. Strict zero-masking (FFN biases + residual leak into padded tokens)
+        x = x.masked_fill(~valid_mask.unsqueeze(-1), 0.0)
+
+        return x
+
+
+# ============================================================================
+# 3b. Biased Spatial GNN — pairwise-geometry attention bias (plugin I-3)
+# ============================================================================
+
+class GeometricBiasEncoderLayer(nn.Module):
+    """
+    Pre-norm transformer encoder block whose self-attention accepts an
+    additive per-head, per-pair bias — nn.TransformerEncoderLayer cannot,
+    so attention is computed manually here.
+
+    attn_logits[b, h, i, j] = (q_i · k_j) / sqrt(d_head) + bias[b, h, i, j]
+    """
+
+    def __init__(self, d_model: int, n_heads: int, d_feedforward: int, dropout: float):
+        super().__init__()
+        assert d_model % n_heads == 0
+        self.n_heads = n_heads
+        self.d_head = d_model // n_heads
+
+        self.qkv_proj = nn.Linear(d_model, d_model * 3)
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.attn_dropout = nn.Dropout(dropout)
+
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_feedforward),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_feedforward, d_model),
+            nn.Dropout(dropout),
+        )
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attn_bias: torch.Tensor,
+        padding_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            x: (B, N, d_model)
+            attn_bias: (B, n_heads, N, N) — additive attention-logit bias.
+            padding_mask: (B, N) bool — True = ignore.
+        """
+        B, N, D = x.shape
+
+        # --- Self-attention (pre-norm) ---
+        h = self.norm1(x)
+        qkv = self.qkv_proj(h).reshape(B, N, 3, self.n_heads, self.d_head)
+        q, k, v = qkv.unbind(dim=2)             # each (B, N, H, d_head)
+        q = q.permute(0, 2, 1, 3)               # (B, H, N, d_head)
+        k = k.permute(0, 2, 1, 3)
+        v = v.permute(0, 2, 1, 3)
+
+        logits = (q @ k.transpose(-1, -2)) / (self.d_head ** 0.5)  # (B, H, N, N)
+        logits = logits + attn_bias
+        logits = logits.masked_fill(
+            padding_mask.view(B, 1, 1, N), float("-inf"),
+        )
+        attn = torch.softmax(logits, dim=-1)
+        attn = self.attn_dropout(attn)
+        out = (attn @ v).permute(0, 2, 1, 3).reshape(B, N, D)
+        x = x + self.out_proj(out)
+
+        # --- FFN (pre-norm) ---
+        x = x + self.ffn(self.norm2(x))
+        return x
+
+
+class BiasedSpatialGNN(nn.Module):
+    """
+    Plugin I-3: inter-object transformer with the pairwise 3D geometry
+    injected as a per-head additive attention bias (Graphormer-style),
+    replacing SpatialGNN's neighbor-averaged positional encoding.
+
+    The pairwise features (distance, direction, log-volume ratio — the same
+    5-dim vector SpatialPositionalEncoding computes and then pools away) are
+    mapped to one scalar bias per attention head, so the explicit relation
+    between each specific pair stays pairwise all the way into attention.
+
+    Drop-in replacement for SpatialGNN: same constructor signature (plus
+    n_heads used for the bias width) and the same
+    forward(tokens, corners, valid_mask) interface.
+    """
+
+    def __init__(
+        self,
+        d_model: int = 256,
+        n_layers: int = 4,
+        n_heads: int = 4,
+        d_feedforward: int = 512,
+        dropout: float = 0.1,
+        d_bias_hidden: int = 32,
+    ):
+        super().__init__()
+        self.n_heads = n_heads
+
+        # Pairwise geometric features → per-head attention bias
+        self.bias_mlp = nn.Sequential(
+            nn.Linear(5, d_bias_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_bias_hidden, n_heads),
+        )
+
+        self.layers = nn.ModuleList([
+            GeometricBiasEncoderLayer(d_model, n_heads, d_feedforward, dropout)
+            for _ in range(n_layers)
+        ])
+        self.final_norm = nn.LayerNorm(d_model)
+
+    @staticmethod
+    def _pair_features(corners: torch.Tensor) -> torch.Tensor:
+        """Pairwise [dist(1), direction(3), log_vol_ratio(1)] — mirrors
+        SpatialPositionalEncoding's features, kept pairwise instead of pooled."""
+        centers = corners.mean(dim=2)  # (B, N, 3)
+
+        edge_a = corners[:, :, 1] - corners[:, :, 0]
+        edge_b = corners[:, :, 3] - corners[:, :, 0]
+        edge_c = corners[:, :, 4] - corners[:, :, 0]
+        volumes = (
+            edge_a.norm(dim=-1) * edge_b.norm(dim=-1) * edge_c.norm(dim=-1)
+        )
+        log_volumes = torch.log(volumes + 1e-6)  # (B, N)
+
+        diff = centers.unsqueeze(2) - centers.unsqueeze(1)             # (B, N, N, 3)
+        dist = torch.sqrt((diff ** 2).sum(dim=-1, keepdim=True) + 1e-6)
+        direction = diff / dist
+        log_vol_ratio = (
+            log_volumes.unsqueeze(2) - log_volumes.unsqueeze(1)
+        ).unsqueeze(-1)
+
+        return torch.cat([dist, direction, log_vol_ratio], dim=-1)  # (B, N, N, 5)
+
+    def forward(
+        self,
+        tokens: torch.Tensor,
+        corners: torch.Tensor,
+        valid_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        B, N = valid_mask.shape
+
+        # 1. Pairwise geometry → per-head bias (computed once, shared by layers)
+        pair_feats = self._pair_features(corners)          # (B, N, N, 5)
+        bias = self.bias_mlp(pair_feats)                    # (B, N, N, H)
+        bias = bias.permute(0, 3, 1, 2)                     # (B, H, N, N)
+
+        # Zero bias on invalid pairs so padding can't steer attention
+        pair_valid = (valid_mask.unsqueeze(2) & valid_mask.unsqueeze(1))
+        bias = bias * pair_valid.unsqueeze(1).float()
+
+        # 2. Padding mask + all-invalid failsafe (as in SpatialGNN)
+        padding_mask = ~valid_mask
+        all_invalid = padding_mask.all(dim=1)
+        if all_invalid.any():
+            padding_mask = padding_mask.clone()
+            padding_mask[all_invalid, 0] = False
+
+        # 3. Biased attention layers
+        x = tokens
+        for layer in self.layers:
+            x = layer(x, bias, padding_mask)
+        x = self.final_norm(x)
+
+        # 4. Strict zero-masking
+        x = x.masked_fill(~valid_mask.unsqueeze(-1), 0.0)
+        return x
+
+
+# ============================================================================
+# 4. Node Predictor
+# ============================================================================
+
+class NodePredictor(nn.Module):
+    """
+    Object class prediction from enriched representations.
+
+    Input:  (N, d_memory)
+    Output: (N, num_classes) logits
+    """
+
+    def __init__(self, d_memory: int, num_classes: int, d_hidden: int = 256):
+        super().__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(d_memory, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),
+            nn.Linear(d_hidden, num_classes),
+        )
+
+    def forward(self, memory_states: torch.Tensor) -> torch.Tensor:
+        return self.mlp(memory_states)
+
+
+# ============================================================================
+# 5. Relationship Predictor — Unified Edge Prediction Pipeline
+# ============================================================================
+
+class RelationshipPredictor(nn.Module):
+    """
+    Unified relationship prediction pipeline.
+
+    Phase 2: Form (K, d_rel) relationship tokens by concatenating:
+       - person visual features (d_model)
+       - object visual features (d_model)
+       - union ROI features (d_union, projected from d_union_roi)
+       - CLIP text features for person + object labels (d_text × 2)
+
+    Phase 3: Self-attention across all K relationship tokens.
+
+    Phase 5: 3 simple MLP heads → att/spa/con logits.
+
+    Phase 4 (temporal edge attention) is applied externally by each method
+    between Phase 3 and Phase 5 via the decomposed interface:
+        rel_tokens = predictor.form_rel_tokens(...)      # Phase 2
+        rel_tokens = predictor.self_attend(rel_tokens)    # Phase 3
+        rel_tokens = temporal_edge_attn(rel_tokens, ...)  # Phase 4 (external)
+        edge_out   = predictor.predict_from_tokens(...)   # Phase 5
+
+    Args:
+        d_model: Per-object enriched token dimension.
+        d_text: CLIP text projection dimension.
+        d_rel: Relationship token dimension.
+        d_union_roi: Raw union ROI feature dimension (e.g. 1024 from DINO).
+        attention_class_num: Output size for attention head.
+        spatial_class_num: Output size for spatial head.
+        contact_class_num: Output size for contacting head.
+        clip_embeddings_path: Path to precomputed CLIP .npy file.
+        n_rel_layers: Number of self-attention layers.
+        n_rel_heads: Number of self-attention heads.
+        dropout: Dropout probability.
+        use_pair_geometry: Plugin I-1 — append an explicit relative-geometry
+            vector (direction, distance, volumes, corner gap from the 3D OBBs)
+            to each pair token. Requires `corners` in batched_form_and_attend.
+        use_soft_text_embedding: Plugin I-2 — text features become the expected
+            CLIP embedding under softmax(node_logits / soft_text_tau) instead
+            of a hard argmax lookup (differentiable; GT override still wins).
+        soft_text_tau: Softmax temperature for the soft text embedding.
+    """
+
+    D_PAIR_GEO_RAW = 8   # raw pair-geometry feature dim (see _compute_pair_geometry)
+    D_PAIR_GEO = 64      # projected pair-geometry dim appended to pair tokens
+
+    def __init__(
+        self,
+        d_model: int = 256,
+        d_text: int = 128,
+        d_rel: int = 256,
+        d_union_roi: int = 1024,
+        attention_class_num: int = 3,
+        spatial_class_num: int = 6,
+        contact_class_num: int = 17,
+        clip_embeddings_path: str = "",
+        n_rel_layers: int = 2,
+        n_rel_heads: int = 4,
+        dropout: float = 0.1,
+        use_pair_geometry: bool = False,
+        use_soft_text_embedding: bool = False,
+        soft_text_tau: float = 1.0,
+    ):
+        super().__init__()
+        self.d_rel = d_rel
+        self.attention_class_num = attention_class_num
+        self.spatial_class_num = spatial_class_num
+        self.contact_class_num = contact_class_num
+        self.use_pair_geometry = use_pair_geometry
+        self.use_soft_text_embedding = use_soft_text_embedding
+        self.soft_text_tau = soft_text_tau
+
+        # --- CLIP text embeddings (frozen, precomputed) ---
+        if clip_embeddings_path:
+            import numpy as np
+            emb = np.load(clip_embeddings_path)  # (C, 512)
+            self.register_buffer('clip_embeddings', torch.from_numpy(emb).float())
+            d_clip = emb.shape[1]  # 512
+        else:
+            # Fallback: random init for testing without CLIP file
+            self.register_buffer('clip_embeddings', torch.randn(37, 512))
+            d_clip = 512
+        self.text_proj = nn.Linear(d_clip, d_text)
+
+        # --- Union feature projector ---
+        d_union = d_rel // 4
+        self.union_proj = nn.Sequential(
+            nn.Linear(d_union_roi, d_union),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(d_union),
+        )
+        self.no_union_embedding = nn.Parameter(torch.randn(d_union) * 0.02)
+
+        # --- Pair geometry projector (plugin I-1) ---
+        if self.use_pair_geometry:
+            self.pair_geo_mlp = nn.Sequential(
+                nn.Linear(self.D_PAIR_GEO_RAW, self.D_PAIR_GEO),
+                nn.ReLU(inplace=True),
+                nn.LayerNorm(self.D_PAIR_GEO),
+            )
+
+        # --- Input projection: concat → d_rel ---
+        # person(d_model) + object(d_model) + union(d_union) + person_text(d_text) + object_text(d_text)
+        #   [+ pair_geometry(D_PAIR_GEO) when use_pair_geometry]
+        d_input = d_model * 2 + d_union + d_text * 2
+        if self.use_pair_geometry:
+            d_input += self.D_PAIR_GEO
+        self.input_proj = nn.Sequential(
+            nn.Linear(d_input, d_rel),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(d_rel),
+        )
+
+        # --- Phase 3: Relationship self-attention ---
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_rel,
+            nhead=n_rel_heads,
+            dim_feedforward=d_rel * 2,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.rel_transformer = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=n_rel_layers,
+            norm=nn.LayerNorm(d_rel),
+        )
+
+        # --- Phase 5: 3 simple MLP heads ---
+        self.att_head = nn.Sequential(
+            nn.Linear(d_rel, d_rel // 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(d_rel // 2, attention_class_num),
+        )
+        self.spa_head = nn.Sequential(
+            nn.Linear(d_rel, d_rel // 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(d_rel // 2, spatial_class_num),
+        )
+        self.con_head = nn.Sequential(
+            nn.Linear(d_rel, d_rel // 2),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(d_rel // 2, contact_class_num),
+        )
+
+    def _get_text_features(self, class_indices: torch.Tensor) -> torch.Tensor:
+        """Look up precomputed CLIP embeddings and project.
+
+        Args:
+            class_indices: (...) long — class indices (any shape).
+
+        Returns:
+            text_feat: (..., d_text)
+        """
+        # Clamp to valid range
+        idx = class_indices.clamp(0, self.clip_embeddings.shape[0] - 1)
+        raw = self.clip_embeddings[idx]  # (..., 512)
+        return self.text_proj(raw)       # (..., d_text)
+
+    def _get_soft_text_features(self, node_logits: torch.Tensor) -> torch.Tensor:
+        """Plugin I-2: expected CLIP embedding under softmax(node_logits / tau).
+
+        Differentiable — relation-loss gradients reach the node head through
+        the text pathway, and early-training argmax noise is averaged out.
+
+        Args:
+            node_logits: (..., C) — gathered per-pair node logits.
+
+        Returns:
+            text_feat: (..., d_text)
+        """
+        C = min(node_logits.shape[-1], self.clip_embeddings.shape[0])
+        probs = torch.softmax(node_logits[..., :C] / self.soft_text_tau, dim=-1)
+        raw = probs @ self.clip_embeddings[:C].to(probs.dtype)  # (..., 512)
+        return self.text_proj(raw)
+
+    @staticmethod
+    def _compute_pair_geometry(
+        corners: torch.Tensor,
+        person_idx: torch.Tensor,
+        object_idx: torch.Tensor,
+    ) -> torch.Tensor:
+        """Plugin I-1: explicit relative 3D geometry per (person, object) pair.
+
+        The spatial predicates (above/beneath/in-front-of/...) are nearly
+        closed-form given the OBBs; this hands the relation head that signal
+        directly instead of hoping it survives the object-token bottleneck.
+
+        Features (D_PAIR_GEO_RAW = 8):
+            0-2  unit direction person-center → object-center (world frame)
+            3    log center distance
+            4    log person OBB volume
+            5    log object OBB volume
+            6    log volume ratio (person / object)
+            7    log minimum corner-to-corner distance (proximity/contact cue)
+
+        Args:
+            corners: (T, N, 8, 3) — world-frame OBB corners.
+            person_idx: (T, K) long — clamped person slot indices.
+            object_idx: (T, K) long — clamped object slot indices.
+
+        Returns:
+            geo: (T, K, 8) raw pair-geometry features.
+        """
+        T, N = corners.shape[:2]
+        K = person_idx.shape[1]
+        eps = 1e-6
+
+        # Gather per-pair corners: (T, K, 8, 3)
+        pidx = person_idx.view(T, K, 1, 1).expand(T, K, 8, 3)
+        oidx = object_idx.view(T, K, 1, 1).expand(T, K, 8, 3)
+        p_corners = torch.gather(corners, 1, pidx)
+        o_corners = torch.gather(corners, 1, oidx)
+
+        p_center = p_corners.mean(dim=2)  # (T, K, 3)
+        o_center = o_corners.mean(dim=2)  # (T, K, 3)
+
+        diff = o_center - p_center
+        dist = torch.sqrt((diff ** 2).sum(dim=-1, keepdim=True) + eps)  # (T, K, 1)
+        unit_dir = diff / dist
+        log_dist = torch.log(dist + eps)
+
+        def _log_volume(c):
+            # OBB volume from edge vectors (corner layout: 0-3 bottom
+            # perimeter, 4-7 top face — same convention as SpatialPositionalEncoding)
+            e_a = c[..., 1, :] - c[..., 0, :]
+            e_b = c[..., 3, :] - c[..., 0, :]
+            e_c = c[..., 4, :] - c[..., 0, :]
+            vol = (
+                e_a.norm(dim=-1) * e_b.norm(dim=-1) * e_c.norm(dim=-1)
+            ).unsqueeze(-1)
+            return torch.log(vol + eps)  # (T, K, 1)
+
+        log_vol_p = _log_volume(p_corners)
+        log_vol_o = _log_volume(o_corners)
+        log_vol_ratio = log_vol_p - log_vol_o
+
+        # Min corner-to-corner distance — a direct contact/proximity cue
+        corner_d = torch.cdist(p_corners, o_corners)          # (T, K, 8, 8)
+        min_corner = corner_d.flatten(-2).min(dim=-1).values  # (T, K)
+        log_min_corner = torch.log(min_corner + eps).unsqueeze(-1)
+
+        return torch.cat([
+            unit_dir, log_dist, log_vol_p, log_vol_o,
+            log_vol_ratio, log_min_corner,
+        ], dim=-1)  # (T, K, 8)
+
+    def batched_form_and_attend(
+        self,
+        enriched_all: torch.Tensor,
+        node_logits_all: torch.Tensor,
+        person_idx: torch.Tensor,
+        object_idx: torch.Tensor,
+        pair_valid: torch.Tensor,
+        union_features: Optional[torch.Tensor] = None,
+        node_class_override: Optional[torch.Tensor] = None,
+        corners: Optional[torch.Tensor] = None,
+    ) -> tuple:
+        """
+        Batched Phase 2 + Phase 3: form rel tokens + self-attend for ALL T frames.
+
+        Accepts pre-padded (T, K_max) tensors from the dataset.
+
+        Args:
+            enriched_all: (T, N, d_model)
+            node_logits_all: (T, N, num_classes)
+            person_idx: (T, K_max) long — pre-padded person indices
+            object_idx: (T, K_max) long — pre-padded object indices
+            pair_valid: (T, K_max) bool — True for real pairs
+            union_features: (T, K_max, d_union_roi) or None — pre-padded
+            node_class_override: (T, N) long or None — known node classes for
+                the text pathway. In predcls the GT labels are task inputs, so
+                they replace argmax(node_logits) here (matching how STTran /
+                DSGDetr consume GT labels in predcls).
+            corners: (T, N, 8, 3) or None — required when use_pair_geometry.
+
+        Returns:
+            rel_tokens: (T, K_max, d_rel) — relationship tokens
+            pair_valid: (T, K_max) bool — validity mask (passed through)
+        """
+        T = enriched_all.shape[0]
+        K_max = person_idx.shape[1] if person_idx.dim() > 1 else 0
+        device = enriched_all.device
+
+        if K_max == 0:
+            return (
+                torch.zeros(T, 0, self.d_rel, device=device),
+                torch.zeros(T, 0, dtype=torch.bool, device=device),
+            )
+
+        # Batched gather person/object representations: (T, K_max, d_model)
+        # Clamp indices to prevent OOB from padding (reads garbage → NaN)
+        N_max = enriched_all.shape[1]
+        person_idx_safe = person_idx.clamp(0, N_max - 1)
+        object_idx_safe = object_idx.clamp(0, N_max - 1)
+        pidx_exp = person_idx_safe.unsqueeze(-1).expand(T, K_max, enriched_all.shape[-1])
+        oidx_exp = object_idx_safe.unsqueeze(-1).expand(T, K_max, enriched_all.shape[-1])
+        person_repr = torch.gather(enriched_all, 1, pidx_exp)  # (T, K_max, d_model)
+        object_repr = torch.gather(enriched_all, 1, oidx_exp)  # (T, K_max, d_model)
+
+        # Text pathway — priority: GT override (predcls) > soft (I-2) > hard argmax
+        if node_class_override is not None:
+            person_class_idx = torch.gather(node_class_override, 1, person_idx_safe)
+            object_class_idx = torch.gather(node_class_override, 1, object_idx_safe)
+            person_text = self._get_text_features(person_class_idx)
+            object_text = self._get_text_features(object_class_idx)
+        else:
+            person_logits = torch.gather(
+                node_logits_all, 1,
+                person_idx_safe.unsqueeze(-1).expand(T, K_max, node_logits_all.shape[-1]),
+            )  # (T, K_max, C)
+            object_logits = torch.gather(
+                node_logits_all, 1,
+                object_idx_safe.unsqueeze(-1).expand(T, K_max, node_logits_all.shape[-1]),
+            )  # (T, K_max, C)
+            if self.use_soft_text_embedding:
+                person_text = self._get_soft_text_features(person_logits)
+                object_text = self._get_soft_text_features(object_logits)
+            else:
+                person_text = self._get_text_features(person_logits.argmax(dim=-1))
+                object_text = self._get_text_features(object_logits.argmax(dim=-1))
+
+        # Batched union features: (T, K_max, d_union)
+        if union_features is not None:
+            union_feat = self.union_proj(union_features)  # (T, K_max, d_union)
+        else:
+            union_feat = self.no_union_embedding.view(1, 1, -1).expand(T, K_max, -1)
+
+        # Concatenate and project: (T, K_max, d_input) → (T, K_max, d_rel)
+        parts = [person_repr, object_repr, union_feat, person_text, object_text]
+
+        # Pair geometry (plugin I-1)
+        if self.use_pair_geometry:
+            if corners is None:
+                raise ValueError(
+                    "use_pair_geometry=True requires `corners` in batched_form_and_attend"
+                )
+            geo_raw = self._compute_pair_geometry(
+                corners, person_idx_safe, object_idx_safe,
+            )  # (T, K_max, 8)
+            parts.append(self.pair_geo_mlp(geo_raw))
+
+        concat = torch.cat(parts, dim=-1)
+        rel_tokens = self.input_proj(concat)  # (T, K_max, d_rel)
+
+        # Zero out padding
+        rel_tokens = rel_tokens * pair_valid.unsqueeze(-1).float()
+
+        # Batched self-attention with padding mask
+        padding_mask = ~pair_valid  # (T, K_max), True = ignore
+        # Failsafe: if all-padded frame, unmask first
+        all_invalid = padding_mask.all(dim=1)
+        if all_invalid.any():
+            padding_mask = padding_mask.clone()
+            padding_mask[all_invalid, 0] = False
+
+        rel_tokens = self.rel_transformer(
+            rel_tokens, src_key_padding_mask=padding_mask,
+        )  # (T, K_max, d_rel)
+
+        # Re-zero padding
+        rel_tokens = rel_tokens * pair_valid.unsqueeze(-1).float()
+
+        return rel_tokens, pair_valid
+
+    def batched_predict(
+        self,
+        rel_tokens: torch.Tensor,
+        pair_valid: torch.Tensor,
+        rel_tokens_contacting: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Batched Phase 5: run 3 MLP heads on padded tokens.
+
+        Args:
+            rel_tokens: (T, K_max, d_rel)
+            pair_valid: (T, K_max) bool
+            rel_tokens_contacting: (T, K_max, d_rel) or None — alternate tokens
+                for the contacting head only (plugin I-6 prototype-enhanced).
+
+        Returns:
+            dict with (T, K_max, C) padded tensors per relationship type.
+            Padded positions are zeroed out.
+        """
+        # Batched heads: (T, K_max, C)
+        att_logits_all = self.att_head(rel_tokens)
+        spa_logits_all = self.spa_head(rel_tokens)
+        con_input = rel_tokens_contacting if rel_tokens_contacting is not None else rel_tokens
+        con_logits_all = self.con_head(con_input)
+
+        # Activation for eval-compatible distributions
+        att_all = torch.softmax(att_logits_all, dim=-1)
+        spa_all = torch.sigmoid(spa_logits_all)
+        con_all = torch.sigmoid(con_logits_all)
+
+        # Zero out padded positions (prevent uniform distributions from softmax
+        # and 0.5 values from sigmoid leaking into padded slots)
+        mask = pair_valid.unsqueeze(-1).float()  # (T, K_max, 1)
+        att_logits_all = att_logits_all * mask
+        att_all = att_all * mask
+        spa_logits_all = spa_logits_all * mask
+        spa_all = spa_all * mask
+        con_logits_all = con_logits_all * mask
+        con_all = con_all * mask
+
+        return {
+            "attention_logits": att_logits_all,    # (T, K_max, 3) — raw logits
+            "attention_distribution": att_all,      # (T, K_max, 3) — probabilities
+            "spatial_distribution": spa_all,        # (T, K_max, 6) — probabilities
+            "contacting_distribution": con_all,     # (T, K_max, 17) — probabilities
+            "spatial_logits": spa_logits_all,        # (T, K_max, 6) — raw logits
+            "contacting_logits": con_logits_all,     # (T, K_max, 17) — raw logits
+        }
+
+    def form_rel_tokens(
+        self,
+        enriched_states: torch.Tensor,
+        person_idx: torch.Tensor,
+        object_idx: torch.Tensor,
+        person_class_idx: torch.Tensor,
+        object_class_idx: torch.Tensor,
+        union_features: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Phase 2: Form relationship tokens.
+
+        Args:
+            enriched_states: (N, d_model) context-enriched object representations.
+            person_idx: (K,) long — person indices.
+            object_idx: (K,) long — object indices.
+            person_class_idx: (K,) long — predicted class for each person.
+            object_class_idx: (K,) long — predicted class for each object.
+            union_features: (K, d_union_roi) or None.
+
+        Returns:
+            rel_tokens: (K, d_rel)
+        """
+        if self.use_pair_geometry:
+            raise NotImplementedError(
+                "form_rel_tokens (legacy per-frame path) does not support "
+                "use_pair_geometry — use batched_form_and_attend with `corners`."
+            )
+        K = person_idx.shape[0]
+
+        # Visual features
+        person_vis = enriched_states[person_idx]   # (K, d_model)
+        object_vis = enriched_states[object_idx]   # (K, d_model)
+
+        # Union features
+        if union_features is not None and union_features.shape[0] > 0:
+            union_feat = self.union_proj(union_features)  # (K, d_union)
+        else:
+            union_feat = self.no_union_embedding.unsqueeze(0).expand(K, -1)
+
+        # CLIP text features
+        person_text = self._get_text_features(person_class_idx)  # (K, d_text)
+        object_text = self._get_text_features(object_class_idx)  # (K, d_text)
+
+        # Concatenate and project
+        concat = torch.cat([person_vis, object_vis, union_feat,
+                            person_text, object_text], dim=-1)
+        return self.input_proj(concat)  # (K, d_rel)
+
+    def self_attend(self, rel_tokens: torch.Tensor) -> torch.Tensor:
+        """
+        Phase 3: Relationship self-attention.
+
+        Args:
+            rel_tokens: (K, d_rel)
+
+        Returns:
+            attended: (K, d_rel)
+        """
+        if rel_tokens.shape[0] == 0:
+            return rel_tokens
+        # Add batch dim → (1, K, d_rel), attend, squeeze
+        return self.rel_transformer(rel_tokens.unsqueeze(0)).squeeze(0)
+
+    def predict_from_tokens(self, rel_tokens: torch.Tensor) -> dict:
+        """
+        Phase 5: 3 simple MLP heads.
+
+        Args:
+            rel_tokens: (K, d_rel) — final relationship representations.
+
+        Returns:
+            dict with attention/spatial/contacting distributions.
+        """
+        att_logits = self.att_head(rel_tokens)
+        spa_logits = self.spa_head(rel_tokens)
+        con_logits = self.con_head(rel_tokens)
+        return {
+            "attention_logits": att_logits,
+            "attention_distribution": torch.softmax(att_logits, dim=-1),
+            "spatial_distribution": torch.sigmoid(spa_logits),
+            "contacting_distribution": torch.sigmoid(con_logits),
+            "spatial_logits": spa_logits,
+            "contacting_logits": con_logits,
+        }
+
+    def forward(
+        self,
+        enriched_states: torch.Tensor,
+        person_idx: torch.Tensor,
+        object_idx: torch.Tensor,
+        person_class_idx: torch.Tensor,
+        object_class_idx: torch.Tensor,
+        union_features: Optional[torch.Tensor] = None,
+    ) -> dict:
+        """
+        Full Phase 2 → 3 → 5 pipeline (no temporal).
+
+        Returns:
+            dict with:
+                attention_logits: (K, att_classes)
+                attention_distribution: (K, att_classes)
+                spatial_distribution: (K, spa_classes)
+                contacting_distribution: (K, con_classes)
+                rel_tokens: (K, d_rel) — for external temporal attention
+        """
+        K = person_idx.shape[0]
+        if K == 0:
+            device = enriched_states.device
+            return {
+                "attention_logits": torch.zeros(0, self.attention_class_num, device=device),
+                "attention_distribution": torch.zeros(0, self.attention_class_num, device=device),
+                "spatial_distribution": torch.zeros(0, self.spatial_class_num, device=device),
+                "contacting_distribution": torch.zeros(0, self.contact_class_num, device=device),
+                "rel_tokens": torch.zeros(0, self.d_rel, device=device),
+            }
+
+        # Phase 2
+        rel_tokens = self.form_rel_tokens(
+            enriched_states, person_idx, object_idx,
+            person_class_idx, object_class_idx, union_features,
+        )
+        # Phase 3
+        rel_tokens = self.self_attend(rel_tokens)
+        # Phase 5
+        preds = self.predict_from_tokens(rel_tokens)
+        preds["rel_tokens"] = rel_tokens
+        return preds
+
+
+# ============================================================================
+# 5b. Temporal Edge Attention — Per-Pair Temporal Self-Attention
+# ============================================================================
+
+class TemporalEdgeAttention(nn.Module):
+    """
+    Per-pair temporal self-attention over the full video.
+
+    Receives relationship tokens from ALL T frames at once.
+    Groups tokens by (person, object) pair, self-attends each pair's
+    temporal sequence, and returns enriched tokens for all frames.
+
+    Stateless — no internal buffer, single forward pass with full
+    gradient flow through all timesteps.
+
+    Args:
+        d_rel: Relationship token dimension.
+        n_heads: Number of attention heads.
+        n_layers: Number of encoder layers.
+        dropout: Dropout probability.
+        max_time: Maximum number of frames (for temporal PE).
+
+    Input:
+        rel_tokens_seq: List[Tensor(K_t, d_rel)] for t=0..T-1
+        person_idx_seq: List[Tensor(K_t,)] for t=0..T-1
+        object_idx_seq: List[Tensor(K_t,)] for t=0..T-1
+    Output:
+        List[Tensor(K_t, d_rel)] — temporally-enriched tokens per frame
+    """
+
+    def __init__(
+        self,
+        d_rel: int = 256,
+        n_heads: int = 4,
+        n_layers: int = 1,
+        dropout: float = 0.1,
+        max_time: int = 300,
+    ):
+        super().__init__()
+        self.d_rel = d_rel
+
+        # Learnable temporal positional encoding
+        self.temporal_pe = nn.Embedding(max_time, d_rel)
+
+        # Self-attention encoder over temporal sequences
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_rel,
+            nhead=n_heads,
+            dim_feedforward=d_rel * 2,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=n_layers,
+            norm=nn.LayerNorm(d_rel),
+        )
+
+    def forward(
+        self,
+        rel_tokens_all: torch.Tensor,
+        pair_valid: torch.Tensor,
+        padded_pidx: torch.Tensor,
+        padded_oidx: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Vectorized temporal edge attention.
+
+        Args:
+            rel_tokens_all: (T, K_max, d_rel) — padded rel tokens from batched_form_and_attend.
+            pair_valid: (T, K_max) bool — True for real pairs.
+            padded_pidx: (T, K_max) long — padded person indices.
+            padded_oidx: (T, K_max) long — padded object indices.
+
+        Returns:
+            enriched: (T, K_max, d_rel) — temporally-enriched tokens (padded).
+        """
+        T, K_max = rel_tokens_all.shape[:2]
+        device = rel_tokens_all.device
+
+        if K_max == 0 or not pair_valid.any():
+            return rel_tokens_all
+
+        # --- Step 1: Vectorized pair grouping ---
+        # Create unique pair keys: pidx * max_N + oidx
+        max_N = max(padded_pidx.max().item(), padded_oidx.max().item()) + 1
+        pair_keys = padded_pidx * max_N + padded_oidx  # (T, K_max)
+
+        # Only consider valid pairs
+        # Set invalid pair keys to a sentinel value
+        SENTINEL = max_N * max_N + 1
+        pair_keys_masked = torch.where(pair_valid, pair_keys, torch.full_like(pair_keys, SENTINEL))
+
+        # Flatten to find unique pairs
+        flat_keys = pair_keys_masked.reshape(-1)  # (T * K_max,)
+        flat_valid = pair_valid.reshape(-1)        # (T * K_max,)
+        flat_tokens = rel_tokens_all.reshape(-1, self.d_rel)  # (T * K_max, d_rel)
+
+        # Frame index for each flat position
+        flat_frame_ids = torch.arange(T, device=device).unsqueeze(1).expand(T, K_max).reshape(-1)
+
+        # Get only valid entries
+        valid_indices = flat_valid.nonzero(as_tuple=True)[0]  # (total_valid,)
+        if valid_indices.numel() == 0:
+            return rel_tokens_all
+
+        valid_keys = flat_keys[valid_indices]          # (total_valid,)
+        valid_tokens = flat_tokens[valid_indices]      # (total_valid, d_rel)
+        valid_frame_ids = flat_frame_ids[valid_indices] # (total_valid,)
+
+        # Assign unique pair IDs
+        unique_keys, inverse_ids = torch.unique(valid_keys, return_inverse=True)  # (num_pairs,), (total_valid,)
+        num_pairs = unique_keys.shape[0]
+
+        # Compute within-group temporal position (vectorized, no Python loop)
+        sort_order = torch.argsort(inverse_ids)
+        sorted_pair_ids = inverse_ids[sort_order]
+
+        # Detect group boundaries and compute within-group position via cumsum
+        is_new_group = torch.ones(sorted_pair_ids.shape[0], dtype=torch.long, device=device)
+        is_new_group[1:] = (sorted_pair_ids[1:] != sorted_pair_ids[:-1]).long()
+        # cumsum gives 1-based group index; within each group, subtracting
+        # the group's starting cumsum yields 0-based within-group position
+        cumsum = torch.cumsum(torch.ones_like(sorted_pair_ids), dim=0)  # 1,2,3,...
+        group_start_cumsum = torch.cummax(cumsum * is_new_group, dim=0)[0]  # start val per group
+        pair_counts = cumsum - group_start_cumsum  # 0-based within-group position
+
+        # Unsort temporal positions
+        temporal_pos = torch.zeros_like(pair_counts)
+        temporal_pos[sort_order] = pair_counts
+
+        T_max = temporal_pos.max().item() + 1 if temporal_pos.numel() > 0 else 1
+
+        # --- Step 2: Scatter into (num_pairs, T_max, d_rel) batch ---
+        batch = torch.zeros(num_pairs, T_max, self.d_rel, device=device)
+        batch[inverse_ids, temporal_pos] = valid_tokens  # gradient flows
+
+        # Padding mask: True = ignore
+        padding_mask = torch.ones(num_pairs, T_max, dtype=torch.bool, device=device)
+        padding_mask[inverse_ids, temporal_pos] = False
+
+        # Frame indices for temporal PE
+        frame_indices = torch.zeros(num_pairs, T_max, dtype=torch.long, device=device)
+        frame_indices[inverse_ids, temporal_pos] = valid_frame_ids
+
+        # --- Step 3: Add temporal positional encoding ---
+        batch = batch + self.temporal_pe(frame_indices)
+
+        # --- Step 4: Self-attend ---
+        attended = self.encoder(batch, src_key_padding_mask=padding_mask)
+
+        # --- Step 5: Scatter back to (T, K_max, d_rel) ---
+        enriched_valid = attended[inverse_ids, temporal_pos]  # (total_valid, d_rel)
+
+        # Write back to flat tensor
+        enriched_flat = torch.zeros_like(flat_tokens)
+        enriched_flat[valid_indices] = enriched_valid
+
+        # Reshape back to (T, K_max, d_rel)
+        enriched_all = enriched_flat.reshape(T, K_max, self.d_rel)
+
+        return enriched_all
+
+
+
+# ============================================================================
+# 6. Camera Pose Encoder
+# ============================================================================
+
+def _rotation_matrix_to_6d(R: torch.Tensor) -> torch.Tensor:
+    """
+    Convert rotation matrix to 6D representation (Zhou et al.).
+
+    Takes the first two columns of R, which provides a continuous and
+    unique representation suitable for neural network learning.
+
+    Args:
+        R: (..., 3, 3) rotation matrix.
+
+    Returns:
+        (..., 6) 6D rotation representation.
+    """
+    return torch.cat([R[..., :, 0], R[..., :, 1]], dim=-1)
+
+
+class CameraPoseEncoder(nn.Module):
+    """
+    Encodes camera extrinsic (4×4 pose matrix) into:
+      1. A global camera token (B, d_camera) — summarizes current viewpoint
+      2. Per-object camera-relative features (B, N, d_camera) — how each
+         object relates to the current camera position and viewing direction
+
+    Accepts batched (B, ...) inputs natively.
+
+    Args:
+        d_camera: Output dimension for camera tokens.
+        d_hidden: Hidden dimension in the encoder MLPs.
+    """
+
+    def __init__(self, d_camera: int = 128, d_hidden: int = 64):
+        super().__init__()
+        self.d_camera = d_camera
+
+        # Global camera token: 6D rot + 3D translation = 9
+        self.global_mlp = nn.Sequential(
+            nn.Linear(9, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(d_hidden),
+            nn.Linear(d_hidden, d_camera),
+        )
+
+        # Per-object camera-relative features:
+        #   log_distance(1) + view_alignment(1) + azimuth_sin(1) + azimuth_cos(1) = 4
+        self.per_object_mlp = nn.Sequential(
+            nn.Linear(4, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_hidden, d_camera),
+        )
+
+    def forward(
+        self,
+        camera_pose: torch.Tensor,
+        corners: torch.Tensor,
+        valid_mask: torch.Tensor,
+    ) -> tuple:
+        """
+        Args:
+            camera_pose: (B, 4, 4) — camera-to-world extrinsic matrix.
+            corners: (B, N, 8, 3) — 3D bbox corners for all objects.
+            valid_mask: (B, N) bool — True for real objects.
+
+        Returns:
+            camera_token: (B, d_camera) — global viewpoint summary.
+            per_object_cam_feats: (B, N, d_camera) — camera-relative per-object features.
+        """
+        B, N = corners.shape[0], corners.shape[1]
+
+        # --- Extract rotation and translation from pose ---
+        R = camera_pose[:, :3, :3]  # (B, 3, 3)
+        t = camera_pose[:, :3, 3]   # (B, 3) — camera position in world
+
+        # --- Global camera token ---
+        rot_6d = _rotation_matrix_to_6d(R)  # (B, 6)
+        global_input = torch.cat([rot_6d, t], dim=-1)  # (B, 9)
+        camera_token = self.global_mlp(global_input)  # (B, d_camera)
+
+        # --- Per-object camera-relative features ---
+        centers = corners.mean(dim=2)  # (B, N, 3)
+
+        # Camera viewing direction (negative Z axis)
+        view_dir = -R[:, :, 2]  # (B, 3)
+        view_dir = view_dir / (view_dir.norm(dim=-1, keepdim=True) + 1e-8)
+
+        # Vector from camera to each object
+        cam_to_obj = centers - t.unsqueeze(1)  # (B, N, 3)
+        dist = cam_to_obj.norm(dim=-1, keepdim=True)  # (B, N, 1)
+        cam_to_obj_norm = cam_to_obj / (dist + 1e-8)  # (B, N, 3)
+
+        # View alignment: dot product with viewing direction
+        view_alignment = (cam_to_obj_norm * view_dir.unsqueeze(1)).sum(dim=-1, keepdim=True)  # (B, N, 1)
+
+        # Azimuth (sin, cos) for rotational equivariance
+        right_dir = R[:, :, 0]  # (B, 3)
+        right_component = (cam_to_obj_norm * right_dir.unsqueeze(1)).sum(dim=-1, keepdim=True)  # (B, N, 1)
+        azimuth_sin = right_component
+        azimuth_cos = view_alignment
+
+        log_dist = torch.log(dist + 1e-6)  # (B, N, 1)
+
+        per_obj_input = torch.cat([
+            log_dist, view_alignment, azimuth_sin, azimuth_cos,
+        ], dim=-1)  # (B, N, 4)
+
+        per_object_cam_feats = self.per_object_mlp(per_obj_input)  # (B, N, d_camera)
+
+        # Zero out padding
+        per_object_cam_feats = per_object_cam_feats * valid_mask.unsqueeze(-1).float()
+
+        return camera_token, per_object_cam_feats
+
+
+# ============================================================================
+# 8. Camera Temporal Encoder (Ego-Motion)
+# ============================================================================
+
+class CameraTemporalEncoder(nn.Module):
+    """
+    Encodes the full sequence of camera poses into ego-motion tokens
+    with full temporal context via self-attention.
+
+    Each timestamp's raw ego-motion (relative pose change from previous frame)
+    is encoded via MLP, then all T tokens self-attend to capture long-range
+    camera motion patterns (e.g., panning back and forth, orbiting around).
+
+    Input:  pose_seq (T, 4, 4)
+    Output: ego_motion_tokens (T, d_camera)
+
+    Args:
+        d_camera: Output dimension for ego-motion tokens.
+        d_hidden: Hidden dimension in the encoder MLP.
+        n_attn_layers: Number of self-attention layers.
+        n_heads: Number of attention heads.
+    """
+
+    def __init__(
+        self,
+        d_camera: int = 128,
+        d_hidden: int = 64,
+        n_attn_layers: int = 2,
+        n_heads: int = 4,
+    ):
+        super().__init__()
+        self.d_camera = d_camera
+
+        # Per-step relative pose encoder: 6D rotation + 3D translation = 9
+        self.ego_mlp = nn.Sequential(
+            nn.Linear(9, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(d_hidden),
+            nn.Linear(d_hidden, d_camera),
+        )
+
+        # Learnable "no previous frame" embedding (for t=0)
+        self.no_prev_embedding = nn.Parameter(torch.randn(d_camera) * 0.02)
+
+        # Learnable temporal positional encoding
+        self.max_time = 300
+        self.temporal_pe = nn.Embedding(self.max_time, d_camera)
+
+        # Self-attention over full temporal context
+        attn_layer = nn.TransformerEncoderLayer(
+            d_model=d_camera,
+            nhead=n_heads,
+            dim_feedforward=d_camera * 2,
+            dropout=0.1,
+            batch_first=True,
+            norm_first=True,
+        )
+        self.temporal_attn = nn.TransformerEncoder(
+            attn_layer,
+            num_layers=n_attn_layers,
+        )
+
+    def forward(
+        self,
+        pose_seq: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            pose_seq: (T, 4, 4) — full sequence of camera poses.
+
+        Returns:
+            ego_motion_tokens: (T, d_camera) — temporally-contextualized
+                               ego-motion tokens for each timestep.
+        """
+        T = pose_seq.shape[0]
+        device = pose_seq.device
+
+        # 1. Compute per-step relative poses → MLP → raw ego tokens (batched)
+        if T == 1:
+            ego_seq = self.no_prev_embedding.unsqueeze(0)  # (1, d_camera)
+        else:
+            # Rigid-body relative pose WITHOUT torch.linalg.inv
+            # For rigid transform [R|t], inv is [R^T | -R^T @ t]
+            # So T_rel = T_{curr} @ T_{prev}^{-1} decomposes as:
+            #   R_rel = R_curr @ R_prev^T
+            #   t_rel = t_curr - R_rel @ t_prev
+            R_curr = pose_seq[1:, :3, :3]   # (T-1, 3, 3)
+            t_curr = pose_seq[1:, :3, 3]    # (T-1, 3)
+            R_prev = pose_seq[:-1, :3, :3]  # (T-1, 3, 3)
+            t_prev = pose_seq[:-1, :3, 3]   # (T-1, 3)
+            R_rel = R_curr @ R_prev.transpose(-1, -2)  # (T-1, 3, 3)
+            t_rel = t_curr - torch.bmm(R_rel, t_prev.unsqueeze(-1)).squeeze(-1)  # (T-1, 3)
+            rot_6d = _rotation_matrix_to_6d(R_rel)  # (T-1, 6)
+            ego_input = torch.cat([rot_6d, t_rel], dim=-1)  # (T-1, 9)
+            ego_from_mlp = self.ego_mlp(ego_input)  # (T-1, d_camera)
+            ego_seq = torch.cat([
+                self.no_prev_embedding.unsqueeze(0),  # (1, d_camera)
+                ego_from_mlp,
+            ], dim=0)  # (T, d_camera)
+
+        # 2. Add temporal positional encoding
+        positions = torch.arange(T, device=device).clamp(max=self.max_time - 1)
+        ego_seq = ego_seq + self.temporal_pe(positions)
+
+        # 3. Self-attend over full temporal context (batch dim = 1)
+        ego_seq = self.temporal_attn(ego_seq.unsqueeze(0)).squeeze(0)  # (T, d_camera)
+
+        return ego_seq
+
+
+
+# ============================================================================
+# 8. Label Smoother — Soft Targets for VLM Pseudo-Labels
+# ============================================================================
+
+class LabelSmoother:
+    """
+    Apply label smoothing to VLM pseudo-labels.
+
+    Tells the model: "The VLM strongly suspects this is [holding], but it might be wrong."
+
+    For CE targets (single-label):
+        1-hot [0, 0, 1, 0] → [ε/3, ε/3, 1-ε, ε/3]
+
+    For BCE targets (multi-label):
+        multi-hot [0, 1, 0, 1] → [ε/(C-k), 1-ε, ε/(C-k), 1-ε]
+        where k = number of active labels
+
+    Args:
+        epsilon: Smoothing factor (0.0 = no smoothing, 1.0 = uniform).
+    """
+
+    def __init__(self, epsilon: float = 0.2):
+        self.epsilon = epsilon
+
+    def smooth_ce_target(self, target_idx: torch.Tensor, num_classes: int) -> torch.Tensor:
+        """
+        Convert hard class index to smoothed distribution.
+
+        Args:
+            target_idx: (K,) long — hard class targets.
+            num_classes: int — total classes.
+
+        Returns:
+            (K, num_classes) float — smoothed probability distribution.
+        """
+        K = target_idx.shape[0]
+        device = target_idx.device
+        smooth = torch.full((K, num_classes), self.epsilon / num_classes, device=device)
+        smooth.scatter_(1, target_idx.unsqueeze(1), 1.0 - self.epsilon + self.epsilon / num_classes)
+        return smooth
+
+    def smooth_bce_target(self, target_multihot: torch.Tensor) -> torch.Tensor:
+        """
+        Smooth multi-hot BCE targets.
+
+        Active labels: 1.0 → (1.0 - epsilon)
+        Inactive labels: 0.0 → epsilon / (C - k)
+        where k = number of active labels per row.
+
+        Args:
+            target_multihot: (K, C) float — multi-hot target.
+
+        Returns:
+            (K, C) float — smoothed target.
+        """
+        K, C = target_multihot.shape
+        k = target_multihot.sum(dim=1, keepdim=True).clamp(min=1)  # (K, 1)
+
+        smoothed = target_multihot.clone()
+        # Active labels: reduce confidence
+        smoothed[target_multihot == 1.0] = 1.0 - self.epsilon
+        # Inactive labels: small positive (clamp denominator to prevent div-by-zero
+        # when all labels are active, i.e., k == C)
+        inactive_val = self.epsilon / (C - k).clamp(min=1)  # (K, 1) broadcast
+        inactive_mask = (target_multihot == 0.0)
+        smoothed[inactive_mask] = inactive_val.expand_as(target_multihot)[inactive_mask]
+        return smoothed
+
+
+# ============================================================================
+# 9. Motion Feature Encoder
+# ============================================================================
+
+class MotionFeatureEncoder(nn.Module):
+    """
+    Encodes 3D motion features (velocity, acceleration) into per-object tokens.
+
+    Uses finite-difference on 3D bbox centers from consecutive frames.
+    Optionally computes camera-relative velocity for parallax-aware motion.
+
+    Accepts batched (B, ...) inputs natively.
+
+    Args:
+        d_motion: Output motion feature dimension.
+        d_hidden: Hidden dimension in the encoder MLP.
+        use_cam_relative: Whether to include camera-relative velocity.
+    """
+
+    def __init__(
+        self,
+        d_motion: int = 64,
+        d_hidden: int = 32,
+        use_cam_relative: bool = True,
+    ):
+        super().__init__()
+        self.d_motion = d_motion
+        self.use_cam_relative = use_cam_relative
+
+        # Input: velocity(3) + acceleration(3) + speed_scalar(1)
+        #   + optionally cam_relative_velocity(3) + cam_rel_speed(1)
+        input_dim = 7  # vel(3) + accel(3) + speed(1)
+        if use_cam_relative:
+            input_dim += 4  # cam_vel(3) + cam_speed(1)
+
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.LayerNorm(d_hidden),
+            nn.Linear(d_hidden, d_hidden),
+            nn.ReLU(inplace=True),
+            nn.Linear(d_hidden, d_motion),
+        )
+
+        # Learnable "no motion" embedding for the first frame
+        self.no_motion_embedding = nn.Parameter(torch.randn(d_motion) * 0.02)
+
+    def forward(
+        self,
+        velocity: Optional[torch.Tensor] = None,
+        acceleration: Optional[torch.Tensor] = None,
+        camera_R: Optional[torch.Tensor] = None,
+        valid_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """
+        Args:
+            velocity: (B, N, 3) — world-frame velocity. None for first frame.
+            acceleration: (B, N, 3) — world-frame acceleration. None for first two frames.
+            camera_R: (B, 3, 3) — camera rotation matrix.
+            valid_mask: (B, N) bool — valid objects.
+
+        Returns:
+            motion_features: (B, N, d_motion) — per-object motion tokens.
+        """
+        if velocity is None:
+            # First frame: return learnable "no motion" for all objects
+            if valid_mask is not None:
+                B, N = valid_mask.shape
+            else:
+                return self.no_motion_embedding.unsqueeze(0).unsqueeze(0)  # (1, 1, d_motion)
+            return self.no_motion_embedding.unsqueeze(0).unsqueeze(0).expand(B, N, -1)  # (B, N, d_motion)
+
+        B, N = velocity.shape[0], velocity.shape[1]
+        device = velocity.device
+
+        # Speed scalar (magnitude of velocity)
+        speed = velocity.norm(dim=-1, keepdim=True)  # (B, N, 1)
+
+        # Acceleration (zeros if not available)
+        if acceleration is None:
+            acceleration = torch.zeros_like(velocity)  # (B, N, 3)
+
+        # Base features
+        feats = [velocity, acceleration, speed]  # 3 + 3 + 1 = 7
+
+        # Camera-relative velocity
+        if self.use_cam_relative and camera_R is not None:
+            # Transform: v_cam = R^T @ v_world → batched einsum
+            cam_vel = torch.einsum('bij,bnj->bni', camera_R.transpose(-1, -2), velocity)  # (B, N, 3)
+            cam_speed = cam_vel.norm(dim=-1, keepdim=True)  # (B, N, 1)
+            feats.extend([cam_vel, cam_speed])
+        elif self.use_cam_relative:
+            feats.extend([
+                torch.zeros(B, N, 3, device=device),
+                torch.zeros(B, N, 1, device=device),
+            ])
+
+        motion_input = torch.cat(feats, dim=-1)  # (B, N, 7 or 11)
+        motion_features = self.mlp(motion_input)  # (B, N, d_motion)
+
+        # Zero out invalid objects
+        if valid_mask is not None:
+            motion_features = motion_features * valid_mask.unsqueeze(-1).float()
+
+        return motion_features
+
+    @staticmethod
+    def compute_velocity(
+        curr_corners: torch.Tensor,
+        prev_corners: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Compute per-object velocity from consecutive corner sets.
+
+        Args:
+            curr_corners: (B, N, 8, 3) or (N, 8, 3) — current frame corners.
+            prev_corners: (B, N, 8, 3) or (N, 8, 3) — previous frame corners.
+
+        Returns:
+            velocity: (..., N, 3) — displacement of center between frames.
+        """
+        curr_centers = curr_corners.mean(dim=-2)  # (..., N, 3)
+        prev_centers = prev_corners.mean(dim=-2)  # (..., N, 3)
+        return curr_centers - prev_centers

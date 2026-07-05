@@ -44,6 +44,11 @@ def _to_device(batch, device):
     return out
 
 
+def _predcls_labels(conf, b):
+    """GT node labels for the text pathway — task inputs in predcls only."""
+    return b.get("object_classes") if conf.mode == "predcls" else None
+
+
 # ============================================================================
 # W-STTran (World-adapted STTran — simplest baseline)
 # ============================================================================
@@ -88,6 +93,7 @@ class TrainWSTTran(TrainWSGGBase):
             pair_valid=b["pair_valid"],
             camera_pose_seq=b.get("camera_poses"),
             union_features_seq=b.get("union_features"),
+            node_labels_seq=_predcls_labels(self._conf, b),
         )
 
         losses = self._loss_fn(
@@ -118,6 +124,7 @@ class TrainWSTTran(TrainWSGGBase):
             pair_valid=b["pair_valid"],
             camera_pose_seq=b.get("camera_poses"),
             union_features_seq=b.get("union_features"),
+            node_labels_seq=_predcls_labels(self._conf, b),
         )
 
         T = b["visual_features"].shape[0]
@@ -236,6 +243,11 @@ class TrainWorldWise(TrainWSGGBase):
             logit_adjustment_tau=getattr(self._conf, 'logit_adjustment_tau', 1.0),
             predicate_priors_path=getattr(self._conf, 'predicate_priors_path', None),
             data_path=self._conf.data_path,
+            # Plugin I-5: per-pair VLM confidence weighting (inert until the
+            # dataset provides a vlm_confidence tensor)
+            use_confidence_weighted_vlm=getattr(self._conf, 'use_confidence_weighted_vlm', False),
+            # Plugin I-8: attractor stability term for energy refinement
+            lambda_stability=getattr(self._conf, 'lambda_stability', 0.0),
         )
 
     def is_temporal(self) -> bool:
@@ -254,6 +266,11 @@ class TrainWorldWise(TrainWSGGBase):
             pair_valid=b["pair_valid"],
             p_mask_visible=getattr(self._conf, 'p_mask_visible', 0.3),
             camera_pose_seq=b.get("camera_poses"),
+            union_features_seq=b.get("union_features"),
+            node_labels_seq=_predcls_labels(self._conf, b),
+            # Plugin I-6: GT contacting labels drive the training-time EMA
+            # prototype updates (unused unless use_predicate_prototypes)
+            gt_contacting_seq=b.get("gt_contacting"),
         )
 
         losses = self._loss_fn(
@@ -268,6 +285,8 @@ class TrainWorldWise(TrainWSGGBase):
             valid_mask=b.get("valid_mask"),
             corners=b.get("corners"),
             gt_node_labels=b.get("object_classes"),
+            # Plugin I-5: per-pair VLM label confidence, when the dataset has it
+            vlm_confidence=b.get("vlm_confidence"),
         )
 
         return losses
@@ -284,6 +303,8 @@ class TrainWorldWise(TrainWSGGBase):
             object_idx_seq=b["object_idx"],
             pair_valid=b["pair_valid"],
             camera_pose_seq=b.get("camera_poses"),
+            union_features_seq=b.get("union_features"),
+            node_labels_seq=_predcls_labels(self._conf, b),
         )
 
         T = b["visual_features"].shape[0]

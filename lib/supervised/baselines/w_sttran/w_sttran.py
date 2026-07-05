@@ -39,10 +39,10 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-from lib.supervised.worldsgg.lks_buffer.lks_memory import vectorized_lks_buffer
-from lib.supervised.worldsgg.lks_buffer.lks_tokenizer import LKSTokenizer
+from lib.supervised.baselines.lks_buffer.lks_memory import vectorized_lks_buffer
+from lib.supervised.baselines.lks_buffer.lks_tokenizer import LKSTokenizer
 
-from lib.supervised.worldsgg.worldsgg_base import (
+from lib.supervised.components import (
     GlobalStructuralEncoder, NodePredictor, RelationshipPredictor,
     SpatialGNN as InterObjectTransformer,
     TemporalEdgeAttention,
@@ -83,13 +83,13 @@ class WSTTran(nn.Module):
         )
 
         # Module 2: LKS Tokenizer (geometry + raw buffer fusion, NO camera)
-        # We pass d_camera=0 since W-STTran doesn't use camera features.
-        # The tokenizer will use zero camera features internally.
+        # d_camera=0: W-STTran has no camera encoder, so the tokenizer gets no
+        # camera slice at all — no dead fusion parameters inflating this tier.
         self.tokenizer = LKSTokenizer(
             d_struct=config.d_struct,
             d_detector_roi=config.d_detector_roi,
             d_model=config.d_model,
-            d_camera=getattr(config, 'd_camera', 128),
+            d_camera=0,
         )
 
         # Module 3: Inter-Object Transformer (vanilla transformer encoder across objects)
@@ -143,6 +143,7 @@ class WSTTran(nn.Module):
         pair_valid: torch.Tensor,
         camera_pose_seq: Optional[torch.Tensor] = None,
         union_features_seq: Optional[torch.Tensor] = None,
+        node_labels_seq: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Process a full video in a single batched forward pass.
@@ -196,6 +197,7 @@ class WSTTran(nn.Module):
         rel_tokens, pair_valid_out = self.rel_predictor.batched_form_and_attend(
             enriched_all, node_logits_all, person_idx_seq, object_idx_seq,
             pair_valid, union_features_seq,
+            node_class_override=node_labels_seq,
         )  # (T, K_max, d_rel), (T, K_max)
 
         # ==================== Step 7: Temporal edge attention ====================

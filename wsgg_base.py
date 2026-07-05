@@ -135,6 +135,9 @@ class WSGGBase:
         self._model = None
         self._device = None
         self._evaluator = None
+        self._evaluator_nc = None
+        self._evaluator_vis = None
+        self._evaluator_occ = None
         self._optimizer = None
         self._scheduler = None
         self._scaler = None
@@ -418,33 +421,31 @@ class WSGGBase:
 
         save_file = os.path.join(self._experiment_dir, "eval_stats.txt")
 
+        def _make(constraint, suffix=""):
+            return BasicSceneGraphEvaluator(
+                mode=self._conf.mode,
+                AG_object_classes=self._test_dataset.object_classes
+                if self._test_dataset else None,
+                AG_all_predicates=all_predicates,
+                AG_attention_predicates=list(ATTENTION_RELATIONSHIPS),
+                AG_spatial_predicates=list(SPATIAL_RELATIONSHIPS),
+                AG_contacting_predicates=list(CONTACTING_RELATIONSHIPS),
+                iou_threshold=0.5,
+                save_file=save_file.replace(".txt", f"{suffix}.txt"),
+                constraint=constraint,
+            )
+
         # With-constraint evaluator (standard)
-        self._evaluator = BasicSceneGraphEvaluator(
-            mode=self._conf.mode,
-            AG_object_classes=self._test_dataset.object_classes
-            if self._test_dataset else None,
-            AG_all_predicates=all_predicates,
-            AG_attention_predicates=list(ATTENTION_RELATIONSHIPS),
-            AG_spatial_predicates=list(SPATIAL_RELATIONSHIPS),
-            AG_contacting_predicates=list(CONTACTING_RELATIONSHIPS),
-            iou_threshold=0.5,
-            save_file=save_file,
-            constraint="with",
-        )
+        self._evaluator = _make("with")
 
         # No-constraint evaluator (unconstrained top-K ranking)
-        self._evaluator_nc = BasicSceneGraphEvaluator(
-            mode=self._conf.mode,
-            AG_object_classes=self._test_dataset.object_classes
-            if self._test_dataset else None,
-            AG_all_predicates=all_predicates,
-            AG_attention_predicates=list(ATTENTION_RELATIONSHIPS),
-            AG_spatial_predicates=list(SPATIAL_RELATIONSHIPS),
-            AG_contacting_predicates=list(CONTACTING_RELATIONSHIPS),
-            iou_threshold=0.5,
-            save_file=save_file.replace(".txt", "_nc.txt"),
-            constraint="no",
-        )
+        self._evaluator_nc = _make("no", "_nc")
+
+        # Occlusion-stratified evaluators (with-constraint): pairs where both
+        # endpoints are visible vs pairs with at least one unseen endpoint.
+        # The masked split is the direct measure of the MWAE occlusion story.
+        self._evaluator_vis = _make("with", "_vispair")
+        self._evaluator_occ = _make("with", "_occpair")
 
 
 

@@ -29,7 +29,7 @@ from pathlib import Path
 
 import torch
 
-from lib.supervised.worldsgg.amwae.loss import AMWAELoss
+from lib.supervised.worldwise.amwae_loss import AMWAELoss
 
 logger = logging.getLogger(__name__)
 

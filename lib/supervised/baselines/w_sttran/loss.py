@@ -7,7 +7,7 @@ Same bucketed VLM noisy-label training as LKSLoss:
   Vis-Unseen / Unseen-Unseen: λ_vlm weighted, smoothed
 """
 
-from lib.supervised.worldsgg.lks_buffer.loss import LKSLoss
+from lib.supervised.baselines.lks_buffer.loss import LKSLoss
 
 # W-STTran uses the same loss function as LKS Buffer.
 # Aliased here for clean per-method imports.

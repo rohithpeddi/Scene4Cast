@@ -49,4 +49,4 @@ method_name: w_dsgdetr_pp
 mode: sgdet
 feature_model: dinov2b
 task_name: worldsgg
-experiment_name: w_dsgdetr_pp_sgdet_dinov2b_v1
+experiment_name: w_dsgdetr_pp_sgdet_dinov2b_v2

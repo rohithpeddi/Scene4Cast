@@ -17,6 +17,12 @@ Examples:
 
     # see what would run without launching anything
     python tools/run_grid.py --dry-run
+
+    # Stage A of the WorldWise⁺ plugin round (hero backbone, both tasks):
+    python tools/run_grid.py --methods worldwise --backbones dinov3l --tiers plus1 plus2 plus3
+
+    # Stage B research plugins, one at a time:
+    python tools/run_grid.py --methods worldwise --backbones dinov3l --tiers proto --modes predcls
 """
 
 import argparse
@@ -30,6 +36,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
 MODES = ["predcls", "sgdet"]
+TIERS = ["plus1", "plus2", "plus3", "noema", "conf", "proto", "xobj", "energy"]
 
 
 def main():
@@ -37,12 +44,21 @@ def main():
     ap.add_argument("--methods", nargs="+", default=METHODS, choices=METHODS)
     ap.add_argument("--backbones", nargs="+", default=BACKBONES, choices=BACKBONES)
     ap.add_argument("--modes", nargs="+", default=MODES, choices=MODES)
+    ap.add_argument("--tiers", nargs="+", default=[], choices=TIERS,
+                    help="WorldWise⁺ tier configs to run (worldwise_<tier>_...)")
     ap.add_argument("--data_path", default="/data/rohith/ag")
     ap.add_argument("--compute-priors", action="store_true",
                     help="run tools/compute_predicate_priors.py before training")
     ap.add_argument("--priors-feature-model", default="dinov2b")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if args.tiers:
+        # Tier configs exist for the hero backbone only; config stem is
+        # worldwise_<tier>_<mode>_<backbone>.yaml with method_name=worldwise.
+        # Appended to --methods so "--methods worldwise --tiers plus1" runs
+        # the I-0 reference AND the tier cell.
+        args.methods = list(args.methods) + [f"worldwise_{t}" for t in args.tiers]
 
     py = sys.executable
 

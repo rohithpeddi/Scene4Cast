@@ -22,6 +22,17 @@ Togglable components (for ablations):
   - TemporalEdgeAttention    (use_temporal_edge_attn)
 
 Full WorldWise = MWAE + all togglable components enabled.
+
+Plugins (WorldWise⁺ round — all default OFF except the I-4 fix; with every
+plugin flag off the architecture is identical to the post-fix I-0 reference):
+  - I-1 use_pair_geometry         explicit relative-geometry vector in pair tokens
+  - I-2 use_soft_text_embedding   expected CLIP embedding under softmax(node logits)
+  - I-3 use_geometric_attn_bias   pairwise-geometry attention bias (BiasedSpatialGNN)
+  - I-4 use_ema_recon_target      EMA reconstruction target (default ON — bug fix)
+  - I-6 use_predicate_prototypes  EMA predicate prototypes for the contacting head
+  - I-7 use_cross_object_retrieval  masked slots retrieve from other objects too
+  - I-8 use_energy_refinement     weight-tied energy diffusion over object tokens
+(I-5 use_confidence_weighted_vlm lives in the loss — see worldwise/loss.py.)
 """
 
 import logging
@@ -33,12 +44,15 @@ from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-from lib.supervised.worldsgg.amwae.scaffold_tokenizer import ScaffoldTokenizer
-from lib.supervised.worldsgg.amwae.associative_retriever import AssociativeRetriever
+from lib.supervised.worldwise.scaffold_tokenizer import ScaffoldTokenizer
+from lib.supervised.worldwise.associative_retriever import AssociativeRetriever
+from lib.supervised.worldwise.energy_diffusion import EnergyDiffusion
+from lib.supervised.worldwise.prototype_memory import PredicatePrototypeMemory
 
-from lib.supervised.worldsgg.worldsgg_base import (
+from lib.supervised.components import (
     GlobalStructuralEncoder, NodePredictor, RelationshipPredictor,
     SpatialGNN as InterObjectTransformer,
+    BiasedSpatialGNN,
     CameraPoseEncoder as ObjectSpatialEncoder,
     CameraTemporalEncoder,
     MotionFeatureEncoder as ObjectMotionEncoder,
@@ -54,9 +68,13 @@ class WorldWise(nn.Module):
     Individual components can be toggled via config flags for ablation.
 
     Args:
-        config: Config namespace with architecture hyperparameters and
-                ablation flags (use_object_spatial_encoder, use_camera_temporal,
-                use_object_motion_encoder, use_temporal_edge_attn).
+        config: Config namespace with architecture hyperparameters, ablation
+                flags (use_object_spatial_encoder, use_camera_temporal,
+                use_object_motion_encoder, use_temporal_edge_attn) and plugin
+                flags (use_pair_geometry, use_soft_text_embedding,
+                use_geometric_attn_bias, use_ema_recon_target,
+                use_predicate_prototypes, use_cross_object_retrieval,
+                use_energy_refinement).
         num_object_classes: Object categories.
         attention_class_num: Attention relationship classes.
         spatial_class_num: Spatial relationship classes.
@@ -79,6 +97,15 @@ class WorldWise(nn.Module):
         self.use_camera_temporal = getattr(config, 'use_camera_temporal', True)
         self.use_object_motion_encoder = getattr(config, 'use_object_motion_encoder', True)
         self.use_temporal_edge_attn = getattr(config, 'use_temporal_edge_attn', True)
+
+        # Plugin flags (WorldWise⁺ round — default OFF except I-4 bug fix)
+        self.use_pair_geometry = getattr(config, 'use_pair_geometry', False)
+        self.use_soft_text_embedding = getattr(config, 'use_soft_text_embedding', False)
+        self.use_geometric_attn_bias = getattr(config, 'use_geometric_attn_bias', False)
+        self.use_ema_recon_target = getattr(config, 'use_ema_recon_target', True)
+        self.use_predicate_prototypes = getattr(config, 'use_predicate_prototypes', False)
+        self.use_cross_object_retrieval = getattr(config, 'use_cross_object_retrieval', False)
+        self.use_energy_refinement = getattr(config, 'use_energy_refinement', False)
 
         # ====================== MWAE Core (always on) ======================
 
@@ -108,6 +135,7 @@ class WorldWise(nn.Module):
             )
 
         # Module 5: Scaffold Tokenizer — handles masking + feature binding
+        # (I-4: reconstruction targets come from an EMA projector by default)
         self.scaffold_tokenizer = ScaffoldTokenizer(
             d_struct=config.d_struct,
             d_visual=config.d_visual,
@@ -115,9 +143,12 @@ class WorldWise(nn.Module):
             d_detector_roi=config.d_detector_roi,
             d_camera=config.d_camera if self.use_object_spatial_encoder else 0,
             d_motion=d_motion if self.use_object_motion_encoder else 0,
+            use_ema_target=self.use_ema_recon_target,
+            ema_momentum=getattr(config, 'ema_target_momentum', 0.996),
         )
 
         # Module 6: Associative Retriever — bidirectional cross-attention
+        # (I-7: optionally cross-object with slot-identity encoding)
         self.retriever = AssociativeRetriever(
             d_model=config.d_model,
             n_layers=config.n_cross_attn_layers,
@@ -125,19 +156,36 @@ class WorldWise(nn.Module):
             d_feedforward=config.d_feedforward,
             dropout=config.dropout,
             d_camera=config.d_camera if self.use_object_spatial_encoder else 0,
+            cross_object=self.use_cross_object_retrieval,
+            max_slots=getattr(config, 'max_objects', 64),
         )
 
         # Module 7: Visibility Embedding
         self.visibility_emb = nn.Embedding(2, config.d_model)
 
-        # Module 8: Inter-Object Transformer (vanilla transformer encoder across objects)
-        self.inter_object_encoder = InterObjectTransformer(
+        # Module 8: Inter-Object Transformer
+        # (I-3: pairwise-geometry attention bias instead of pooled spatial PE)
+        inter_object_cls = BiasedSpatialGNN if self.use_geometric_attn_bias else InterObjectTransformer
+        self.inter_object_encoder = inter_object_cls(
             d_model=config.d_model,
             n_layers=config.n_self_attn_layers,
             n_heads=config.n_heads,
             d_feedforward=config.d_feedforward,
             dropout=config.dropout,
         )
+
+        # Module 8b: Energy refinement (plugin I-8) — weight-tied recurrent
+        # transformer descending an energy landscape over object tokens.
+        # Emits "enriched"/"h_prev" for the attractor stability loss.
+        if self.use_energy_refinement:
+            self.energy_refiner = EnergyDiffusion(
+                d_model=config.d_model,
+                n_heads=config.n_heads,
+                d_feedforward=config.d_feedforward,
+                dropout=config.dropout,
+                train_iters=getattr(config, 'energy_train_iters', 4),
+                eval_iters=getattr(config, 'energy_eval_iters', 15),
+            )
 
         # Module 9: Node Predictor
         self.node_predictor = NodePredictor(
@@ -146,6 +194,7 @@ class WorldWise(nn.Module):
         )
 
         # Module 10: Relationship Predictor
+        # (I-1: pair-geometry features; I-2: soft text embeddings)
         clip_path = getattr(config, 'clip_embeddings_path', '')
         clip_path = Path(config.data_path) / clip_path if clip_path else None
         self.rel_predictor = RelationshipPredictor(
@@ -160,6 +209,9 @@ class WorldWise(nn.Module):
             n_rel_layers=config.n_rel_layers,
             n_rel_heads=config.n_rel_heads,
             dropout=config.dropout,
+            use_pair_geometry=self.use_pair_geometry,
+            use_soft_text_embedding=self.use_soft_text_embedding,
+            soft_text_tau=getattr(config, 'soft_text_tau', 1.0),
         )
 
         # Module 11: Temporal Edge Attention (togglable)
@@ -168,6 +220,17 @@ class WorldWise(nn.Module):
                 d_rel=config.d_rel,
                 n_heads=config.n_rel_heads,
                 n_layers=config.n_temporal_edge_layers,
+                dropout=config.dropout,
+            )
+
+        # Module 12: Predicate Prototype Memory (plugin I-6) — EMA class
+        # prototypes enhance tokens for the long-tailed contacting head.
+        if self.use_predicate_prototypes:
+            self.prototype_memory = PredicatePrototypeMemory(
+                d_rel=config.d_rel,
+                num_classes=contact_class_num,
+                momentum=getattr(config, 'prototype_momentum', 0.99),
+                n_heads=config.n_rel_heads,
                 dropout=config.dropout,
             )
 
@@ -186,6 +249,8 @@ class WorldWise(nn.Module):
         p_mask_visible: float = 0.0,
         camera_pose_seq: Optional[torch.Tensor] = None,
         union_features_seq: Optional[torch.Tensor] = None,
+        node_labels_seq: Optional[torch.Tensor] = None,
+        gt_contacting_seq: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Process a full video in a single batched forward pass.
@@ -201,6 +266,10 @@ class WorldWise(nn.Module):
             p_mask_visible:      Training masking probability.
             camera_pose_seq:     (T, 4, 4) or None
             union_features_seq:  (T, K_max, d_union_roi) or None
+            node_labels_seq:     (T, N_max) long or None — GT node classes.
+                In predcls these are task inputs and drive the text pathway.
+            gt_contacting_seq:   (T, K_max, C_con) or None — GT contacting
+                labels; training-time prototype updates (plugin I-6) only.
 
         Returns:
             dict with (T, ...) padded tensors.
@@ -282,6 +351,15 @@ class WorldWise(nn.Module):
             valid_mask=valid_mask_seq,
         )
 
+        # ==================== Step 7b: Energy refinement (plugin I-8) ====================
+        h_prev_all = None
+        if self.use_energy_refinement:
+            enriched_all, h_prev_all = self.energy_refiner(
+                tokens=enriched_all,
+                corners=corners_seq,
+                valid_mask=valid_mask_seq,
+            )
+
         # ==================== Step 8: Node prediction ====================
         node_logits_all = self.node_predictor(enriched_all)
 
@@ -292,6 +370,8 @@ class WorldWise(nn.Module):
         rel_tokens, pair_valid_out = self.rel_predictor.batched_form_and_attend(
             enriched_all, node_logits_all, person_idx_seq, object_idx_seq,
             pair_valid, union_features_seq,
+            node_class_override=node_labels_seq,
+            corners=corners_seq,
         )
 
         # ==================== Step 11: Temporal edge attention (togglable) ====================
@@ -302,10 +382,21 @@ class WorldWise(nn.Module):
         else:
             enriched_rel = rel_tokens
 
-        # ==================== Step 12: Predict distributions ====================
-        edge_out = self.rel_predictor.batched_predict(enriched_rel, pair_valid_out)
+        # ==================== Step 11b: Predicate prototypes (plugin I-6) ====================
+        con_tokens = None
+        if self.use_predicate_prototypes:
+            if self.training and gt_contacting_seq is not None:
+                self.prototype_memory.update(
+                    enriched_rel, gt_contacting_seq, pair_valid_out,
+                )
+            con_tokens = self.prototype_memory(enriched_rel, pair_valid_out)
 
-        return {
+        # ==================== Step 12: Predict distributions ====================
+        edge_out = self.rel_predictor.batched_predict(
+            enriched_rel, pair_valid_out, rel_tokens_contacting=con_tokens,
+        )
+
+        out = {
             "node_logits": node_logits_all,
             "attention_logits": edge_out["attention_logits"],
             "attention_distribution": edge_out["attention_distribution"],
@@ -319,3 +410,8 @@ class WorldWise(nn.Module):
             "reconstruction_predictions": recon_pred_all,
             "reconstruction_targets": original_visual_all,
         }
+        if self.use_energy_refinement:
+            # Consumed by the attractor stability loss (lambda_stability > 0)
+            out["enriched"] = enriched_all
+            out["h_prev"] = h_prev_all
+        return out
