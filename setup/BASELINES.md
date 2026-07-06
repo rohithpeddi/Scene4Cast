@@ -11,8 +11,14 @@ W-STTran      = GSE + LKS buffer + inter-object transformer + temporal-edge atte
 W-STTran++    = + ObjectSpatialEncoder          (camera-frame position)
 W-DSGDetr     = + TemporalObjectEncoder         (per-slot temporal self-attention)
 W-DSGDetr++   = + ObjectMotionEncoder           (world-frame velocity/acceleration)
-WorldWise     = + ego-motion + MWAE + tail-aware loss   → see WORLDWISE.md
+WorldWise(v2e)= + ego-motion + MWAE + pair geometry + tuned loss  → see WORLDWISE.md
 ```
+
+**The baselines are frozen** — they are the unchanged controls of the final
+campaign; every improvement round happened on WorldWise only. Their training
+loss keeps the original noisy-label recipe (λ_vlm = 0.2 on unseen pairs),
+which WorldWise-v2e deliberately abandons — that asymmetry is a *finding*
+(the noisy supervision hurts; see `docs/DECISION_LOG.md`), not an oversight.
 
 ## Task & I/O contract
 

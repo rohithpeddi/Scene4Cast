@@ -18,11 +18,8 @@ Examples:
     # see what would run without launching anything
     python tools/run_grid.py --dry-run
 
-    # Stage A of the WorldWise⁺ plugin round (hero backbone, both tasks):
-    python tools/run_grid.py --methods worldwise --backbones dinov3l --tiers plus1 plus2 plus3
-
-    # Stage B research plugins, one at a time:
-    python tools/run_grid.py --methods worldwise --backbones dinov3l --tiers proto --modes predcls
+    # a single ablation cell:
+    python tools/run_grid.py --methods worldwise --backbones dinov3l --tiers abl_noego --modes predcls
 """
 
 import argparse
@@ -36,11 +33,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
 MODES = ["predcls", "sgdet"]
-TIERS = ["plus1", "plus2", "plus3", "plus3pe", "noema",
-         "tau025", "tau05", "tau075",
-         "notau", "lowmask", "nomask", "novlm", "nomotion", "noego",
-         "v2a", "v2b", "v2c", "v2d", "v2e", "v2f",
-         "conf", "proto", "xobj", "energy"]
+TIERS = ["v2a", "v2f", "v2g",
+         "abl_notau", "abl_nomask", "abl_noema",
+         "abl_nospatial", "abl_noego", "abl_nomotion", "abl_notempedge"]
 METHODS_BACKBONE = "resnet50"  # baselines exist only here; worldwise everywhere
 
 

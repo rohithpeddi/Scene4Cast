@@ -1,5 +1,5 @@
 """
-Per-head gate report for the WorldWise⁺ plugin round.
+Per-head report for the WorldWise component-ablation table.
 
 The keep/drop gate criteria are per-head (spatial R/mR for I-1/I-3,
 contacting mR for I-2/I-6, masked-pair recall for I-7) — the aggregate
@@ -28,7 +28,7 @@ import os
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
+BASELINE_METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp"]
 METHODS_BACKBONE = "resnet50"
 HERO = "dinov3l"
 
@@ -36,32 +36,21 @@ HERO = "dinov3l"
 # (attention 3, spatial 6, contacting 17 — see wsgg_base._init_evaluators)
 HEADS = [("attention", 3), ("spatial", 6), ("contacting", 17)]
 
-# tier -> (parent tier, gate-target metric description)
+# Main WorldWise experiment stem (the v2e recipe) — ablations diff against it
+MAIN_STEM = "worldwise_v2e"
+
+# ablation tier -> (parent, what it removes/changes)
 TIER_INFO = {
-    "plus1":   ("base",  "spatial mR (I-1 pair geometry)"),
-    "plus2":   ("plus1", "contacting mR (I-2 soft text; sgdet only — GT override masks it in predcls)"),
-    "plus3":   ("plus2", "spatial mR (I-3 attention bias)"),
-    "plus3pe": ("plus1", "spatial mR (I-3 retry: PE + bias)"),
-    "noema":   ("base",  "neutrality check (I-4 EMA target A/B)"),
-    "tau025":  ("base",  "R/mR trade-off (tau sweep)"),
-    "tau05":   ("base",  "R/mR trade-off (tau sweep)"),
-    "tau075":  ("base",  "R/mR trade-off (tau sweep)"),
-    "notau":    ("base", "R recovery (remove tail rebalancing)"),
-    "lowmask":  ("base", "R recovery (p_mask_visible 0.3->0.1)"),
-    "nomask":   ("base", "R recovery (no artificial masking/recon)"),
-    "novlm":    ("base", "R recovery (drop noisy unseen-pair labels)"),
-    "nomotion": ("base", "component subtraction (motion encoder off)"),
-    "noego":    ("base", "component subtraction (ego-motion off)"),
-    "v2a":      ("base", "v2 candidate: I-1 + tau=0.5"),
-    "v2b":      ("base", "v2 candidate: I-1 + tau=0.5 + mask=0.1"),
-    "v2c":      ("base", "v2 candidate: I-1 + tau=0.25 + mask=0.1"),
-    "v2d":      ("base", "v2 candidate: v2b + lambda_vlm=0"),
-    "v2e":      ("base", "v2 refinement: I-1 + tau=0.5 + lambda_vlm=0, mask 0.3"),
-    "v2f":      ("base", "v2 refinement: I-1 + tau=0.75 + lambda_vlm=0, mask 0.3"),
-    "conf":    ("base",  "contacting mR on unseen pairs (I-5)"),
-    "proto":   ("base",  "contacting mR (I-6 prototypes)"),
-    "xobj":    ("base",  "occpair (masked-pair) R/mR (I-7)"),
-    "energy":  ("base",  "overall wc R (I-8 energy refinement)"),
+    "v2a":            ("base", "+ noisy VLM supervision back (lambda_vlm=0.2)"),
+    "v2f":            ("base", "tau=0.75 (mR-max operating point)"),
+    "abl_notau":      ("base", "- logit adjustment"),
+    "abl_nomask":     ("base", "- artificial masking (recon/sim off)"),
+    "abl_noema":      ("base", "- EMA recon target"),
+    "v2g":            ("base", "- pair geometry (I-1)"),
+    "abl_nospatial":  ("base", "- ObjectSpatialEncoder"),
+    "abl_noego":      ("base", "- ego-motion encoder"),
+    "abl_nomotion":   ("base", "- object motion encoder"),
+    "abl_notempedge": ("base", "- temporal edge attention"),
 }
 
 
@@ -130,7 +119,7 @@ def main():
     print(f"## Per-head mean recall — methods @ {METHODS_BACKBONE}\n")
     print("| Method | R@20 | mR@20 | att mR | spa mR | con mR | vis-pair R | occ-pair R |")
     print("|---|---|---|---|---|---|---|---|")
-    for m in METHODS:
+    for m in BASELINE_METHODS + [MAIN_STEM]:
         row = load(m, METHODS_BACKBONE)
         if row is None:
             print(f"| {m} | — | — | — | — | — | — | — |")
@@ -143,7 +132,7 @@ def main():
 
     # ---------- 2. Tier ladder @ hero ----------
     hero = args.hero_backbone
-    rows = {"base": load("worldwise", hero)}
+    rows = {"base": load(MAIN_STEM, hero)}
     for t in TIER_INFO:
         rows[t] = load(f"worldwise_{t}", hero)
 
@@ -179,7 +168,7 @@ def main():
               f"{cell(occl(row, 'occpair/R@20'), occl(parent, 'occpair/R@20') if parent else None)} | "
               f"{target} |")
 
-    tier_line("worldwise (I-0)", "base")
+    tier_line("worldwise (v2e, full)", "base")
     for t in TIER_INFO:
         tier_line(f"+{t}", t)
 

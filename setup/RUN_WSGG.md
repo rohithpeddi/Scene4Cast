@@ -6,10 +6,15 @@ feature-extraction walkthrough lives in `docs/METHODS_README.md` (note:
 `docs/` is git-ignored — that file exists on machines where it was authored,
 not in fresh clones).
 
-**Campaign design (July 2026):** baselines run only at **resnet50** (method
-comparison at the common backbone); WorldWise runs at **all four backbones**
-(scaling story); WorldWise⁺ plugin tiers run at **dinov3l**. 2 tasks
-(predcls, sgdet), 1 seed (0), identical budget for every cell → **32 runs**.
+**Final campaign design:** WorldWise's main configuration is the round-2
+winner **v2e** (pair geometry + τ=0.5 + λ_vlm=0 + mask 0.3; experiment stem
+`worldwise_v2e`, so historical v2e cells are reused). Three parts × 2 tasks
+(predcls, sgdet), 1 seed (0), identical budget everywhere:
+
+1. **Baselines, unchanged** @ resnet50 — the method-comparison controls.
+2. **WorldWise (v2e)** @ all four backbones — main method + scaling.
+3. **Component-wise ablations** of the main config @ dinov3l — one change
+   per tier (see [WORLDWISE.md](WORLDWISE.md) for the 10-tier table).
 
 ## 0. Prerequisites
 
@@ -80,31 +85,20 @@ Checkpoints: `{save_path}/{experiment_name}/checkpoint_N/checkpoint_state.pth`
 python tools/run_grid_multigpu.py --gpus 0 1 2 --compute-priors
 ```
 
-One worker per GPU pulls from a shared, priority-ordered queue:
+`--per-gpu` worker slots per GPU (default 3) pull from a shared queue.
+Completed cells are skip-detected — historical v2e / v2a / v2f / v2g results
+are reused via their experiment names, so the command only launches what is
+missing:
 
-**Post round-2, the default schedule is trimmed to what still matters**
-(completed cells are skip-detected, so the default command re-runs nothing):
-
-| Stage | Cells | Status |
+| Stage | Cells | Purpose |
 |---|---|---|
-| `table_a` | 5 methods × resnet50 × 2 modes (10) | ACTIVE — the ladder table |
-| `scaling` | worldwise × dinov2b/2l/3l × 2 modes (6) | ACTIVE — Table B + tier I-0 ref |
-| `v2` | v2a…v2f × {resnet50, dinov3l} × 2 modes (24) | ACTIVE — final-ladder candidates (v2e/v2f are the live ones) |
-| `stage_a` | plus1/2/3 + noema (8) | RETIRED — verdicts logged (plus1 KEEP, rest DROP) |
-| `tune` | τ sweep + plus3pe (8) | RETIRED — answered by v2 differencing |
-| `subtract` | notau/lowmask/… (12) | RETIRED — answered; nomotion/noego optional |
-| `stage_b` | conf/proto/xobj/energy (8) | RETIRED — all failed the gate (proto catastrophic) |
+| `table_a` | 4 baselines + worldwise × resnet50 × 2 modes (10) | The method ladder |
+| `scaling` | worldwise × dinov2b/2l/3l × 2 modes (6) | Table B backbone scaling |
+| `abl` | 10 ablation tiers × dinov3l × 2 modes (20) | Table C component ablations |
 
-Retired stages still run if named explicitly (`--stages subtract`) — the
-launcher prints why they were retired.
-
-Final tables once a v2 winner is chosen (winner also needs dinov2b/2l runs via
-`python tools/run_grid.py --methods worldwise --tiers v2e --backbones dinov2b dinov2l`):
-
-```bash
-python tools/aggregate_results.py --mode predcls --tiers --v2 v2e   # ladder row + v2 scaling
-python tools/report_gate_metrics.py --mode predcls                  # occpair check on λ_vlm=0
-```
+(Earlier exploratory rounds — plugin stages, τ sweep, subtraction study, v2
+candidates — are concluded; their verdicts live in `docs/DECISION_LOG.md` and
+their configs were removed. Historical results remain in `results/`.)
 
 - Per-run logs: `logs/grid/<experiment>.log`; live status:
   `results/grid_run_status.csv`.
@@ -143,18 +137,18 @@ Render the three tables (best epoch by wc/R@20 per cell):
 ```bash
 python tools/aggregate_results.py --mode predcls --tiers   # Tables A, B, C + CSV
 python tools/aggregate_results.py --mode sgdet  --tiers
+python tools/report_gate_metrics.py --mode predcls         # per-head + occlusion split
 ```
 
-- **Table A** — methods @ resnet50 · **Table B** — WorldWise across backbones ·
-  **Table C** — WorldWise⁺ plugin ladder @ dinov3l.
+- **Table A** — 4 baselines + WorldWise (v2e) @ resnet50 (the ladder) ·
+  **Table B** — WorldWise across backbones · **Table C** — component-wise
+  ablations @ dinov3l (each row = main config minus/altering one thing).
 
-## 6. Decision gate
+## 6. Decision log
 
-A plugin survives if it moves its **target metric** by ≥ +0.3 @ dinov3l
-without degrading the other task (targets per plugin in
-[WORLDWISE.md](WORLDWISE.md)). Record every verdict in
-`docs/DECISION_LOG.md` — hypothesis,
-run IDs, deltas, keep/drop, follow-up.
+Every keep/drop/composition decision of the campaign — including how v2e was
+selected — is recorded in `docs/DECISION_LOG.md` with hypothesis, run IDs,
+deltas, and verdicts. New ablation findings append there.
 
 ## Troubleshooting
 

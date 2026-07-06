@@ -1,35 +1,26 @@
 """
-Generate the WorldSGG hierarchy-experiment config grid.
+Generate the WorldSGG experiment config grid (final campaign structure).
 
-Grid structure (July 2026 restructure):
-  baselines  x resnet50 only    — method-comparison happens at the common backbone
-  worldwise  x all 4 backbones  — backbone-scaling story is WorldWise-only
+WorldWise's MAIN configuration is the round-2 winner **v2e**:
+  I-0 architecture + pair geometry (I-1) + tau=0.5 logit adjustment +
+  lambda_vlm=0 (no noisy VLM supervision) + p_mask=0.3.
+Its experiment names keep the `worldwise_v2e` stem so every already-trained
+v2e cell is reused as-is.
 
-  = 4 baselines x 1 backbone x 2 tasks (8)
-  + worldwise x 4 backbones x 2 tasks (8)   → 16 base configs (1 fixed seed each)
+Campaign structure:
+  1. baselines x resnet50            — method-comparison table (unchanged)
+  2. worldwise (=v2e) x 4 backbones  — main method + backbone scaling
+  3. ablations x dinov3l             — component-wise ablation of the main
+                                       config (one change per tier)
+  x 2 tasks (predcls, sgdet)
 
-  methods   : w_sttran, w_sttran_pp, w_dsgdetr, w_dsgdetr_pp, worldwise
-  backbones : resnet50, dinov2b, dinov2l, dinov3l   (feature_model dir name)
-  tasks     : predcls, sgdet
-
-The five methods form a strict nested capability ladder (see the model files);
-the ladder is realised in code, so configs differ only by method_name / mode /
-feature_model / experiment_name (+ WorldWise-only MWAE & tail-loss keys).
-
-Experiment version is _v2: the Phase-1/2 fixes (velocity gating, predcls GT
-text pathway, EMA reconstruction target, WorldWise union features) change
-model behavior, so _v1 results are not comparable and every cell must be
-regenerated under the frozen code.
-
-Writes to configs/methods/<mode>/<method>_<mode>_<backbone>.yaml
-
-WorldWise⁺ plugin tiers (--tiers): cumulative Stage-A ladder + Stage-B
-research plugins at the hero backbone, written as
-configs/methods/<mode>/worldwise_<tier>_<mode>_<backbone>.yaml
+Writes to configs/methods/<mode>/<method>_<mode>_<backbone>.yaml, ablations
+as configs/methods/<mode>/worldwise_<tier>_<mode>_dinov3l.yaml. Stale configs
+from retired campaign rounds are deleted on regeneration.
 
 Run (stdlib only, no torch needed):
-    python tools/gen_grid_configs.py           # 40-cell base grid
-    python tools/gen_grid_configs.py --tiers   # + WorldWise⁺ tier configs
+    python tools/gen_grid_configs.py           # base grid only
+    python tools/gen_grid_configs.py --tiers   # + ablation configs
 """
 
 import argparse
@@ -100,7 +91,10 @@ COMMON = [
     ("label_smoothing_vlm", 0.2),
 ]
 
-# WorldWise-only keys: MWAE core + tail-aware logit adjustment.
+# WorldWise-only keys — the MAIN configuration is v2e (round-2 winner):
+# MWAE core + pair geometry + tau=0.5 + lambda_vlm=0 + mask 0.3.
+# Keys here OVERRIDE same-named COMMON keys (render() dedupes) — that is how
+# WorldWise gets lambda_vlm=0 while baselines keep 0.2.
 WORLDWISE_EXTRA = [
     ("n_cross_attn_layers", 2),
     ("n_self_attn_layers", 3),
@@ -113,14 +107,22 @@ WORLDWISE_EXTRA = [
     ("use_camera_temporal", True),
     ("use_object_motion_encoder", True),
     ("use_temporal_edge_attn", True),
-    # Tail-aware loss (WorldWise-exclusive)
+    # v2e loss recipe: no noisy VLM supervision on unseen pairs — the
+    # simulated-unseen objective (clean labels on artificially masked pairs)
+    # is the only edge supervision for the masked pathway. Round-2 result:
+    # +4 R / +9 mR / +9.5 occpair vs lambda_vlm=0.2.
+    ("lambda_vlm", 0.0),
+    # Tail-aware logit adjustment at the round-2 knee (tau=1.0 was unstable
+    # and traded 13 R points; 0.75 is the published mR-max point).
     ("use_logit_adjustment", True),
-    ("logit_adjustment_tau", 1.0),
+    ("logit_adjustment_tau", 0.5),
     # predicate_priors_path is mode-specific — filled in by render()
     ("predicate_priors_path", "features/predicate_priors_{mode}.json"),
-    # ---- WorldWise⁺ plugin flags (I-0 = everything off; I-4 fix = on) ----
     ("use_ema_recon_target", True),
-    ("use_pair_geometry", False),
+    # v2e architecture plugin: explicit pair geometry in relation tokens
+    ("use_pair_geometry", True),
+    # Retired plugins (round-2 gate: all failed) — kept as explicit flags so
+    # the config fully documents the architecture.
     ("use_soft_text_embedding", False),
     ("use_geometric_attn_bias", False),
     ("attn_bias_keep_pe", False),
@@ -131,67 +133,37 @@ WORLDWISE_EXTRA = [
     ("lambda_stability", 0.0),
 ]
 
-# WorldWise⁺ tiers — Stage A is a strict cumulative ladder (mirrors the
-# original nested-method construction); Stage B are one-at-a-time research
-# plugins layered on whatever Stage A survivors define WorldWise-v2.
-WW_PLUS_TIERS = {
-    # Stage A — cumulative
-    "plus1": {"use_pair_geometry": True},
-    "plus2": {"use_pair_geometry": True, "use_soft_text_embedding": True},
-    "plus3": {"use_pair_geometry": True, "use_soft_text_embedding": True,
-              "use_geometric_attn_bias": True},
-    # I-3 retry (round-1 P6): keep the spatial PE AND add the attention bias
-    # (the plus3 R-drop is suspected to be the lost PE, not the bias). Built
-    # on plus1 only — I-2 is a provisional drop from round 1.
-    "plus3pe": {"use_pair_geometry": True, "use_geometric_attn_bias": True,
-                "attn_bias_keep_pe": True},
-    # A/B control for the Phase-2 EMA-target fix (predcls only is enough)
-    "noema": {"use_ema_recon_target": False},
-    # τ sweep (round-1 P1): the τ=1.0 default trades ~13 R@20 points for the
-    # mR gain — find the knee of the R/mR curve.
-    "tau025": {"logit_adjustment_tau": 0.25},
-    "tau05":  {"logit_adjustment_tau": 0.5},
-    "tau075": {"logit_adjustment_tau": 0.75},
-    # Subtraction tiers (round-1.5): WorldWise carries training pressures the
-    # baselines don't — test whether REMOVING them recovers R@K. Each removes
-    # exactly one thing from I-0.
-    "notau":   {"use_logit_adjustment": False},        # no tail rebalancing at all
-    "lowmask": {"p_mask_visible": 0.1},                # gentler artificial masking
-    "nomask":  {"p_mask_visible": 0.0,                 # no artificial masking →
-                "p_simulate_unseen": 0.0},             #   recon/sim losses vanish
-    "novlm":   {"lambda_vlm": 0.0},                    # drop noisy unseen-pair labels
-    "nomotion": {"use_object_motion_encoder": False},  # component subtraction
-    "noego":    {"use_camera_temporal": False},        # component subtraction
-    # Stage B — research plugins (run one at a time on the Stage-A winner)
-    "conf":   {"use_confidence_weighted_vlm": True},
-    "proto":  {"use_predicate_prototypes": True},
-    "xobj":   {"use_cross_object_retrieval": True},
-    "energy": {"use_energy_refinement": True, "lambda_stability": 0.1},
-    # ---- WorldWise-v2 recomposition candidates (round 2) ----
-    # Each = I-0 + I-1 (the only R-positive plugin) + tuned training pressures.
-    # They bracket the expected optimum so ONE campaign settles the final
-    # composition: v2a = mild fix (τ only) · v2b = τ + gentler masking ·
-    # v2c = R-leaning (low τ) · v2d = v2b + drop noisy VLM labels.
-    "v2a": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5},
-    "v2b": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5,
-            "p_mask_visible": 0.1},
-    "v2c": {"use_pair_geometry": True, "logit_adjustment_tau": 0.25,
-            "p_mask_visible": 0.1},
-    "v2d": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5,
-            "p_mask_visible": 0.1, "lambda_vlm": 0.0},
-    # Round-2 refinements (see ROUND2_RESULTS_ANALYSIS.md §2): v2d won but
-    # carries the mask=0.1 choice that v2a↔v2b showed costs ~5 mR. These keep
-    # the λ_vlm=0 win and restore full masking; v2f pushes τ for more mR.
-    "v2e": {"use_pair_geometry": True, "logit_adjustment_tau": 0.5,
-            "lambda_vlm": 0.0},
-    "v2f": {"use_pair_geometry": True, "logit_adjustment_tau": 0.75,
-            "lambda_vlm": 0.0},
+# Component-wise ablations of the MAIN (v2e) configuration — one change per
+# tier, all @ the hero backbone. Overrides apply on top of WORLDWISE_EXTRA.
+# Three tiers keep their historical names so already-trained cells are reused
+# verbatim (the override reproduces the identical historical config):
+#   v2a = main with the noisy VLM supervision added back (loss ablation)
+#   v2f = main at tau=0.75 (the published mR-max operating point)
+#   v2g = main without pair geometry (I-1 attribution)
+ABLATION_TIERS = {
+    # ---- loss ablations ----
+    "v2a":            {"lambda_vlm": 0.2},                # + noisy VLM supervision back
+    "v2f":            {"logit_adjustment_tau": 0.75},     # tau operating point
+    "abl_notau":      {"use_logit_adjustment": False},    # − logit adjustment
+    "abl_nomask":     {"p_mask_visible": 0.0,             # − artificial masking
+                       "p_simulate_unseen": 0.0},         #   (recon/sim vanish)
+    "abl_noema":      {"use_ema_recon_target": False},    # − EMA recon target
+    # ---- architecture ablations ----
+    "v2g":            {"use_pair_geometry": False},          # − pair geometry (I-1)
+    "abl_nospatial":  {"use_object_spatial_encoder": False}, # − camera-frame features
+    "abl_noego":      {"use_camera_temporal": False},        # − ego-motion encoder
+    "abl_nomotion":   {"use_object_motion_encoder": False},  # − object motion encoder
+    "abl_notempedge": {"use_temporal_edge_attn": False},     # − temporal edge attention
 }
 
-# v2 candidates compete for the FINAL ladder, so unlike diagnostic tiers they
-# are generated at every backbone: the ladder table lives at resnet50 and the
-# winner also fills Table B (all backbones).
-V2_CANDIDATES = ["v2a", "v2b", "v2c", "v2d", "v2e", "v2f"]
+# Config files from retired campaign rounds — deleted on regeneration.
+RETIRED_TIER_FILES = [
+    "plus1", "plus2", "plus3", "plus3pe", "noema",
+    "tau025", "tau05", "tau075",
+    "notau", "lowmask", "nomask", "novlm", "nomotion", "noego",
+    "conf", "proto", "xobj", "energy",
+    "v2b", "v2c", "v2d", "v2e",  # v2e is now the MAIN config, not a tier
+]
 
 
 def fmt(v):
@@ -206,43 +178,40 @@ def fmt(v):
 
 def render(method, mode, backbone, tier=None):
     stem = f"{method}_{tier}" if tier else method
-    exp = f"{stem}_{mode}_{backbone}_{VERSION}"
+    # The main WorldWise config keeps the historical `worldwise_v2e` experiment
+    # stem so every already-trained v2e cell is reused verbatim.
+    exp_stem = "worldwise_v2e" if (method == "worldwise" and tier is None) else stem
+    exp = f"{exp_stem}_{mode}_{backbone}_{VERSION}"
     title = f"{method}  |  mode={mode}  |  backbone={backbone}"
     if tier:
-        title += f"  |  tier={tier} ({', '.join(sorted(WW_PLUS_TIERS[tier]))})"
+        title += f"  |  ablation={tier} ({', '.join(sorted(ABLATION_TIERS[tier]))})"
+    elif method == "worldwise":
+        title += "  |  MAIN config = v2e (pair geometry, tau=0.5, lambda_vlm=0)"
     lines = [
         "# ============================================================================",
         f"# {title}",
-        "# Auto-generated by tools/gen_grid_configs.py - hierarchy experiment grid.",
+        "# Auto-generated by tools/gen_grid_configs.py - final campaign structure.",
         "# Usage:",
         f"#   python train_wsgg_methods.py --config configs/methods/{mode}/{stem}_{mode}_{backbone}.yaml",
         "# ============================================================================",
         "",
     ]
-    items = list(COMMON)
+    # Dict-merge so WORLDWISE_EXTRA overrides same-named COMMON keys
+    # (e.g. lambda_vlm: baselines 0.2, WorldWise 0.0)
+    merged = dict(COMMON)
     if method == "worldwise":
-        items = items + WORLDWISE_EXTRA
-        # Mode-specific priors file (predcls/sgdet label distributions differ;
-        # a single shared path let one mode's priors overwrite the other's)
-        items = [
-            (k, v.format(mode=mode) if k == "predicate_priors_path" else v)
-            for k, v in items
-        ]
+        merged.update(dict(WORLDWISE_EXTRA))
+        merged["predicate_priors_path"] = merged["predicate_priors_path"].format(mode=mode)
         if tier:
-            overrides = WW_PLUS_TIERS[tier]
-            items = [(k, overrides.get(k, v)) for k, v in items]
-            # Tier keys not present in the base list (e.g. lambda_stability
-            # is already listed; this catches any future additions)
-            listed = {k for k, _ in items}
-            items += [(k, v) for k, v in overrides.items() if k not in listed]
-    items = items + [
-        ("method_name", method),
-        ("mode", mode),
-        ("feature_model", backbone),
-        ("task_name", "worldsgg"),
-        ("experiment_name", exp),
-    ]
-    for k, v in items:
+            merged.update(ABLATION_TIERS[tier])
+    merged.update({
+        "method_name": method,
+        "mode": mode,
+        "feature_model": backbone,
+        "task_name": "worldsgg",
+        "experiment_name": exp,
+    })
+    for k, v in merged.items():
         lines.append(f"{k}: {fmt(v)}")
     return "\n".join(lines) + "\n"
 
@@ -250,7 +219,7 @@ def render(method, mode, backbone, tier=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tiers", action="store_true",
-                    help="also generate WorldWise⁺ tier configs at the hero backbone")
+                    help="also generate the component-ablation configs @ hero backbone")
     args = ap.parse_args()
 
     n = 0
@@ -274,20 +243,29 @@ def main():
                 if os.path.exists(stale):
                     os.remove(stale)
                     removed += 1
-                    print(f"  removed stale configs/methods/{mode}/{method}_{mode}_{backbone}.yaml")
+                    print(f"  removed stale configs/methods/{mode}/{fname}")
 
         if args.tiers:
-            for tier in WW_PLUS_TIERS:
-                # Diagnostic tiers live at the hero backbone; v2 recomposition
-                # candidates are generated at every backbone (ladder @ resnet50,
-                # scaling for the winner).
-                tier_backbones = BACKBONES if tier in V2_CANDIDATES else [HERO_BACKBONE]
-                for backbone in tier_backbones:
-                    fname = f"worldwise_{tier}_{mode}_{backbone}.yaml"
-                    with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
-                        f.write(render("worldwise", mode, backbone, tier=tier))
-                    n += 1
-                    print(f"  wrote configs/methods/{mode}/{fname}")
+            for tier in ABLATION_TIERS:
+                fname = f"worldwise_{tier}_{mode}_{HERO_BACKBONE}.yaml"
+                with open(os.path.join(out_dir, fname), "w", encoding="utf-8") as f:
+                    f.write(render("worldwise", mode, HERO_BACKBONE, tier=tier))
+                n += 1
+                print(f"  wrote configs/methods/{mode}/{fname}")
+
+        # Delete configs from retired campaign rounds (and ablation configs at
+        # non-hero backbones left over from the v2-candidate round)
+        stale_names = [
+            (t, b) for t in RETIRED_TIER_FILES for b in BACKBONES
+        ] + [
+            (t, b) for t in ABLATION_TIERS for b in BACKBONES if b != HERO_BACKBONE
+        ]
+        for tier, backbone in stale_names:
+            stale = os.path.join(out_dir, f"worldwise_{tier}_{mode}_{backbone}.yaml")
+            if os.path.exists(stale):
+                os.remove(stale)
+                removed += 1
+                print(f"  removed retired configs/methods/{mode}/worldwise_{tier}_{mode}_{backbone}.yaml")
     print(f"\nGenerated {n} configs ({removed} stale removed).")
 
 

@@ -13,19 +13,18 @@ several per GPU is the intended throughput mode. Each process still holds its
 own copy of the feature set in RAM, so watch host memory: peak ≈
 (gpus x per_gpu) feature sets resident at once.
 
-Campaign structure (July 2026): baselines run ONLY at resnet50 (the common
-backbone for the method-comparison table); WorldWise runs at all 4 backbones
-(the scaling story); WorldWise⁺ tiers run at the hero backbone (dinov3l).
+Final campaign structure — WorldWise's MAIN configuration is v2e (round-2
+winner: pair geometry + tau=0.5 + lambda_vlm=0 + mask 0.3); its experiment
+names keep the `worldwise_v2e` stem so already-trained v2e cells are reused:
 
-DEFAULT schedule (post round-2, only what still matters — completed cells are
-skip-detected so re-running the same command costs nothing):
-  1. table_a  — 5 methods @ resnet50, both modes            (method comparison, 10)
-  2. scaling  — worldwise @ dinov2b/dinov2l/dinov3l         (Table B + tier I-0 ref, 6)
-  3. v2       — v2a..v2f @ {resnet50, dinov3l}, both modes  (final-ladder candidates, 24)
+  1. table_a  — 4 baselines + WorldWise @ resnet50, both modes  (ladder, 10)
+  2. scaling  — WorldWise @ dinov2b/dinov2l/dinov3l, both modes (Table B, 6)
+  3. abl      — component-wise ablations of the main config @ dinov3l,
+                both modes (10 tiers x 2 = 20; v2a/v2f/v2g cells reuse
+                historical results)
 
-RETIRED stages (answered/failed — run only by naming them in --stages):
-  stage_a (verdicts logged) · tune (answered by v2 differencing) ·
-  subtract (answered; nomotion/noego optional) · stage_b (all failed the gate)
+Completed cells are skip-detected, so re-running the default command only
+launches what is missing.
 
 Each run's stdout/stderr goes to logs/grid/<experiment>.log; a status line is
 appended to results/grid_run_status.csv as runs finish. Already-completed runs
@@ -36,8 +35,8 @@ Usage (on the training server):
     # everything: base grid + all tiers, 3 GPUs x 3 slots = 9 concurrent (32 runs)
     python tools/run_grid_multigpu.py --gpus 0 1 2 --per-gpu 3 --compute-priors
 
-    # only the decision-critical cells (method table + scaling + Stage A)
-    python tools/run_grid_multigpu.py --gpus 0 1 2 --stages table_a scaling stage_a
+    # only the ablation cells
+    python tools/run_grid_multigpu.py --gpus 0 1 2 --stages abl
 
     # one run per GPU (e.g. if memory is tight)
     python tools/run_grid_multigpu.py --gpus 0 1 2 --per-gpu 1
@@ -64,33 +63,16 @@ MODES = ["predcls", "sgdet"]
 HERO = "dinov3l"                 # WorldWise⁺ tiers run here
 METHODS_BACKBONE = "resnet50"    # all 5 methods compared here
 SCALING_BACKBONES = ["dinov2b", "dinov2l", "dinov3l"]  # worldwise-only extras
-STAGE_A_TIERS = ["plus1", "plus2", "plus3", "noema"]
-# Round-1 follow-ups: τ sweep for the tail-aware loss + I-3 PE+bias retry
-TUNE_TIERS = ["tau025", "tau05", "tau075", "plus3pe"]
-# Round-1.5 subtraction study: does REMOVING training pressure recover R@K?
-SUBTRACT_TIERS = ["notau", "lowmask", "nomask", "novlm", "nomotion", "noego"]
-# Round-2 recomposition candidates — run at the LADDER backbone (resnet50,
-# where Table A lives) AND the hero backbone; the winner then scales to the
-# remaining backbones via run_grid.py.
-V2_TIERS = ["v2a", "v2b", "v2c", "v2d", "v2e", "v2f"]
-V2_BACKBONES = [METHODS_BACKBONE, HERO]
-STAGE_B_TIERS = ["conf", "proto", "xobj", "energy"]
-STAGES = ["table_a", "scaling", "stage_a", "tune", "subtract", "v2", "stage_b"]
-
-# What still matters (round-2 verdicts, docs/ROUND2_RESULTS_ANALYSIS.md):
-# the final ladder needs the base tables + the v2 candidates only. Completed
-# cells are skip-detected, so the default schedule re-runs nothing.
-DEFAULT_STAGES = ["table_a", "scaling", "v2"]
-
-# Retired stages — answered or failed; runnable only via explicit --stages.
-RETIRED = {
-    "stage_a":  "complete; verdicts logged (plus1 KEEP, plus2/plus3 DROP, noema neutral)",
-    "tune":     "answered by v2 candidate differencing (τ knee ∈ [0.5, 0.75]; "
-                "plus3pe only matters if I-3 is ever revisited)",
-    "subtract": "lowmask/nomask/novlm/notau answered by v2a–d differencing; "
-                "nomotion/noego optional for a components table, not ladder-blocking",
-    "stage_b":  "all four plugins failed the round-2 gate (proto catastrophic)",
-}
+# Component-wise ablations of the main (v2e) config — must match
+# ABLATION_TIERS in tools/gen_grid_configs.py. v2a/v2f/v2g keep historical
+# names so their already-trained cells are reused.
+ABLATION_TIERS = [
+    "v2a", "v2f", "abl_notau", "abl_nomask", "abl_noema",          # loss
+    "v2g", "abl_nospatial", "abl_noego", "abl_nomotion",           # architecture
+    "abl_notempedge",
+]
+STAGES = ["table_a", "scaling", "abl"]
+DEFAULT_STAGES = STAGES
 
 
 def read_config_fields(cfg_path):
@@ -141,36 +123,11 @@ def build_schedule(args):
             for b in SCALING_BACKBONES:
                 add("scaling", f"worldwise_{mode}_{b}", mode)
 
-    # 3. Stage A plugin ladder @ hero backbone
-    if "stage_a" in args.stages:
+    # 3. Component-wise ablations of the main config @ hero backbone
+    if "abl" in args.stages:
         for mode in args.modes:
-            for t in STAGE_A_TIERS:
-                add("stage_a", f"worldwise_{t}_{mode}_{HERO}", mode)
-
-    # 3b. Round-1 tuning follow-ups: τ sweep + I-3 PE+bias retry @ hero
-    if "tune" in args.stages:
-        for mode in args.modes:
-            for t in TUNE_TIERS:
-                add("tune", f"worldwise_{t}_{mode}_{HERO}", mode)
-
-    # 3c. Round-1.5 subtraction study @ hero
-    if "subtract" in args.stages:
-        for mode in args.modes:
-            for t in SUBTRACT_TIERS:
-                add("subtract", f"worldwise_{t}_{mode}_{HERO}", mode)
-
-    # 3d. Round-2 recomposition candidates @ ladder + hero backbones
-    if "v2" in args.stages:
-        for mode in args.modes:
-            for t in V2_TIERS:
-                for b in V2_BACKBONES:
-                    add("v2", f"worldwise_{t}_{mode}_{b}", mode)
-
-    # 4. Stage B research plugins @ hero backbone (gate on Stage A first)
-    if "stage_b" in args.stages:
-        for mode in args.modes:
-            for t in STAGE_B_TIERS:
-                add("stage_b", f"worldwise_{t}_{mode}_{HERO}", mode)
+            for t in ABLATION_TIERS:
+                add("abl", f"worldwise_{t}_{mode}_{HERO}", mode)
 
     return cells
 
@@ -231,9 +188,7 @@ def main():
     ap.add_argument("--per-gpu", type=int, default=3,
                     help="concurrent training processes per GPU (default 3)")
     ap.add_argument("--stages", nargs="+", default=DEFAULT_STAGES, choices=STAGES,
-                    help="stages to schedule (default = the decision-critical "
-                         f"set {DEFAULT_STAGES}; retired stages must be named "
-                         "explicitly)")
+                    help=f"stages to schedule (default: all = {DEFAULT_STAGES})")
     ap.add_argument("--modes", nargs="+", default=MODES, choices=MODES)
     ap.add_argument("--data_path", default="/data/rohith/ag")
     ap.add_argument("--compute-priors", action="store_true",
@@ -243,10 +198,6 @@ def main():
                     help="re-run cells even if their final epoch is logged")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-
-    for s in args.stages:
-        if s in RETIRED:
-            print(f"NOTE: stage '{s}' is retired — {RETIRED[s]}")
 
     py = sys.executable
 

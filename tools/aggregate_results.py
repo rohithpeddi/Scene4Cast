@@ -1,23 +1,20 @@
 """
-Aggregate WorldSGG grid results into the two hierarchy tables.
+Aggregate WorldSGG results into the final campaign tables.
 
-Reads results/<experiment>_metrics.jsonl (one row per epoch, written by
-train_wsgg_base.py) for every grid cell and emits:
+WorldWise's MAIN configuration is v2e (experiment stem `worldwise_v2e` — kept
+so historical v2e cells are reused). Reads results/<experiment>_metrics.jsonl
+and emits:
 
-  Table A — method comparison @ the common backbone (resnet50) [rows = ladder]
-  Table B — backbone scaling for WorldWise                     [rows = backbones]
-  Table C — WorldWise⁺ plugin ladder @ the hero backbone       [--tiers]
+  Table A — 4 baselines + WorldWise @ resnet50            [the method ladder]
+  Table B — WorldWise across all four backbones            [backbone scaling]
+  Table C — component-wise ablations of WorldWise @ dinov3l  [--tiers]
 
-Grid structure (July 2026): baselines exist only at resnet50; WorldWise at
-all four backbones; tiers at the hero backbone (dinov3l).
+For each cell we select one epoch (default: best With-Constraint R@20,
+matching checkpoint selection) and read all metrics from it. Column maxima
+are **bold**. Also writes a wide CSV (results/grid_summary_<mode>.csv).
 
-For each cell we select one epoch (default: the epoch with the best
-With-Constraint R@20, matching the checkpoint-selection metric) and read all
-metrics from it. The column maximum in each table is **bold**.
-
-Also writes a wide CSV (results/grid_summary_<mode>.csv) with every cell.
-
-    python tools/aggregate_results.py --mode predcls --hero-backbone dinov3l --tiers
+    python tools/aggregate_results.py --mode predcls --tiers
+    python tools/aggregate_results.py --mode sgdet  --tiers
 """
 
 import argparse
@@ -27,21 +24,27 @@ import os
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
+BASELINES = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
-METHODS_BACKBONE = "resnet50"  # the only backbone all 5 methods share
-# Stage-A cumulative ladder + A/B + tuning follow-ups + Stage-B research
-# plugins (must match WW_PLUS_TIERS in tools/gen_grid_configs.py)
-TIERS = ["plus1", "plus2", "plus3", "plus3pe", "noema",
-         "tau025", "tau05", "tau075",
-         "notau", "lowmask", "nomask", "novlm", "nomotion", "noego",
-         "v2a", "v2b", "v2c", "v2d", "v2e", "v2f",
-         "conf", "proto", "xobj", "energy"]
+METHODS_BACKBONE = "resnet50"   # the only backbone all methods share
+HERO_BACKBONE = "dinov3l"       # ablations run here
+MAIN_STEM = "worldwise_v2e"     # main WorldWise experiment stem (v2e recipe)
+MAIN_LABEL = "worldwise (v2e)"
 
-
-def valid_combo(method, backbone):
-    return method == "worldwise" or backbone == METHODS_BACKBONE
-
+# Ablation rows: tier stem -> table label (order = table order).
+# Must match ABLATION_TIERS in tools/gen_grid_configs.py.
+ABLATIONS = [
+    ("v2a",            "+ noisy VLM supervision (λ_vlm=0.2)"),
+    ("v2f",            "τ=0.75 (mR-max operating point)"),
+    ("abl_notau",      "− logit adjustment"),
+    ("abl_nomask",     "− artificial masking (recon/sim off)"),
+    ("abl_noema",      "− EMA recon target"),
+    ("v2g",            "− pair geometry (I-1)"),
+    ("abl_nospatial",  "− ObjectSpatialEncoder"),
+    ("abl_noego",      "− ego-motion encoder"),
+    ("abl_nomotion",   "− object motion encoder"),
+    ("abl_notempedge", "− temporal edge attention"),
+]
 
 KS = [10, 20, 50]
 METRIC_COLS = (
@@ -51,7 +54,7 @@ METRIC_COLS = (
 
 
 def load_exp(results_dir, stem, select, sel_metric):
-    """Load one experiment's metric rows; stem = '<name>_<mode>_<backbone>_<ver>'."""
+    """Load one experiment's best/last metric row; stem excludes _metrics.jsonl."""
     path = os.path.join(results_dir, f"{stem}_metrics.jsonl")
     if not os.path.exists(path):
         return None
@@ -71,12 +74,6 @@ def load_exp(results_dir, stem, select, sel_metric):
     if select == "last":
         return rows[-1]
     return max(rows, key=lambda r: r.get(sel_metric, 0.0))
-
-
-def load_cell(results_dir, method, mode, backbone, select, sel_metric, version):
-    return load_exp(
-        results_dir, f"{method}_{mode}_{backbone}_{version}", select, sel_metric,
-    )
 
 
 def render_table(title, row_labels, row_keys, cells, constraint):
@@ -107,7 +104,7 @@ def render_table(title, row_labels, row_keys, cells, constraint):
     lines = [
         f"\n### {title} — {'With Constraint' if constraint == 'wc' else 'No Constraint'}",
         "",
-        "| Method/Backbone | " + " | ".join(headers) + " |",
+        "| Method | " + " | ".join(headers) + " |",
         "|" + "---|" * (len(headers) + 1),
     ]
     for rk, label in zip(row_keys, row_labels):
@@ -119,95 +116,68 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results_dir", default=os.path.join(REPO, "results"))
     ap.add_argument("--mode", default="predcls", choices=["predcls", "sgdet"])
-    ap.add_argument("--hero-backbone", default="dinov3l", choices=BACKBONES)
     ap.add_argument("--select", default="best", choices=["best", "last"])
     ap.add_argument("--sel-metric", default="wc/R@20")
     ap.add_argument("--version", default="v2",
-                    help="experiment-name version suffix (v1 = pre-fix legacy)")
+                    help="experiment-name version suffix")
     ap.add_argument("--tiers", action="store_true",
-                    help="also render Table C (WorldWise⁺ plugin ladder)")
-    ap.add_argument("--v2", default=None, choices=["v2a", "v2b", "v2c", "v2d", "v2e", "v2f"],
-                    help="append this recomposition candidate to Table A as "
-                         "worldwise-v2 (reads worldwise_<cand>_<mode>_resnet50) "
-                         "and use it for Table B across backbones")
+                    help="also render Table C (component-wise ablations)")
     args = ap.parse_args()
 
-    # Load every cell in the design
-    grid = {}
-    for m in METHODS:
-        for b in BACKBONES:
-            grid[(m, b)] = load_cell(
-                args.results_dir, m, args.mode, b, args.select, args.sel_metric,
-                args.version,
-            ) if valid_combo(m, b) else None
-
-    # ---- CSV dump ----
-    csv_path = os.path.join(args.results_dir, f"grid_summary_{args.mode}.csv")
-    os.makedirs(args.results_dir, exist_ok=True)
-    with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["method", "backbone", "mode", "epoch"] + METRIC_COLS)
-        for m in METHODS:
-            for b in BACKBONES:
-                if not valid_combo(m, b):
-                    continue  # not part of the design (baseline @ non-resnet50)
-                r = grid[(m, b)]
-                if r is None:
-                    w.writerow([m, b, args.mode, "—"] + ["—"] * len(METRIC_COLS))
-                else:
-                    w.writerow([m, b, args.mode, r.get("epoch", "?")]
-                               + [r.get(c, "") for c in METRIC_COLS])
-
-    # ---- Table A: method comparison at the common backbone (resnet50) ----
-    a_keys, a_labels = list(METHODS), list(METHODS)
-    a_cells = {m: grid[(m, METHODS_BACKBONE)] for m in METHODS}
-    if args.v2:
-        # The final ladder row: recomposed WorldWise at the ladder backbone
-        a_keys.append("v2")
-        a_labels.append(f"worldwise-v2 ({args.v2})")
-        a_cells["v2"] = load_exp(
+    def load(stem_prefix, backbone):
+        return load_exp(
             args.results_dir,
-            f"worldwise_{args.v2}_{args.mode}_{METHODS_BACKBONE}_{args.version}",
+            f"{stem_prefix}_{args.mode}_{backbone}_{args.version}",
             args.select, args.sel_metric,
         )
-    print(f"\n# WorldSGG hierarchy — mode={args.mode}, select={args.select} ({args.sel_metric})")
-    print(render_table(f"Table A · Methods @ {METHODS_BACKBONE}", a_labels, a_keys, a_cells, "wc"))
-    print(render_table(f"Table A · Methods @ {METHODS_BACKBONE}", a_labels, a_keys, a_cells, "nc"))
 
-    # ---- Table B: WorldWise backbone scaling (v2 candidate when selected) ----
-    if args.v2:
-        b_cells = {
-            b: load_exp(
-                args.results_dir,
-                f"worldwise_{args.v2}_{args.mode}_{b}_{args.version}",
-                args.select, args.sel_metric,
-            )
-            for b in BACKBONES
-        }
-        b_title = f"Table B · WorldWise-v2 ({args.v2}) backbone scaling"
-    else:
-        b_cells = {b: grid[("worldwise", b)] for b in BACKBONES}
-        b_title = "Table B · WorldWise backbone scaling"
-    print(render_table(b_title, BACKBONES, BACKBONES, b_cells, "wc"))
-    print(render_table(b_title, BACKBONES, BACKBONES, b_cells, "nc"))
+    # ---- Table A: the method ladder at the common backbone ----
+    a_keys = BASELINES + ["main"]
+    a_labels = BASELINES + [MAIN_LABEL]
+    a_cells = {m: load(m, METHODS_BACKBONE) for m in BASELINES}
+    a_cells["main"] = load(MAIN_STEM, METHODS_BACKBONE)
 
-    # ---- Table C: WorldWise⁺ plugin ladder at the hero backbone ----
+    print(f"\n# WorldSGG — mode={args.mode}, select={args.select} ({args.sel_metric})")
+    print(render_table(f"Table A · Method ladder @ {METHODS_BACKBONE}",
+                       a_labels, a_keys, a_cells, "wc"))
+    print(render_table(f"Table A · Method ladder @ {METHODS_BACKBONE}",
+                       a_labels, a_keys, a_cells, "nc"))
+
+    # ---- Table B: WorldWise backbone scaling ----
+    b_cells = {b: load(MAIN_STEM, b) for b in BACKBONES}
+    print(render_table(f"Table B · {MAIN_LABEL} backbone scaling",
+                       BACKBONES, BACKBONES, b_cells, "wc"))
+    print(render_table(f"Table B · {MAIN_LABEL} backbone scaling",
+                       BACKBONES, BACKBONES, b_cells, "nc"))
+
+    # ---- Table C: component-wise ablations at the hero backbone ----
     if args.tiers:
-        hero = args.hero_backbone
-        c_keys = ["base"] + TIERS
-        c_labels = [f"worldwise (I-0)"] + [f"worldwise+{t}" for t in TIERS]
-        c_cells = {"base": grid[("worldwise", hero)]}
-        for t in TIERS:
-            c_cells[t] = load_exp(
-                args.results_dir,
-                f"worldwise_{t}_{args.mode}_{hero}_{args.version}",
-                args.select, args.sel_metric,
-            )
-        print(render_table(f"Table C · WorldWise⁺ plugin ladder @ {hero}",
+        c_keys = ["main"] + [t for t, _ in ABLATIONS]
+        c_labels = [f"{MAIN_LABEL} — full"] + [label for _, label in ABLATIONS]
+        c_cells = {"main": load(MAIN_STEM, HERO_BACKBONE)}
+        for t, _label in ABLATIONS:
+            c_cells[t] = load(f"worldwise_{t}", HERO_BACKBONE)
+        print(render_table(f"Table C · Component ablations @ {HERO_BACKBONE}",
                            c_labels, c_keys, c_cells, "wc"))
-        print(render_table(f"Table C · WorldWise⁺ plugin ladder @ {hero}",
+        print(render_table(f"Table C · Component ablations @ {HERO_BACKBONE}",
                            c_labels, c_keys, c_cells, "nc"))
 
+    # ---- CSV dump (every cell in the design) ----
+    csv_path = os.path.join(args.results_dir, f"grid_summary_{args.mode}.csv")
+    os.makedirs(args.results_dir, exist_ok=True)
+    design = [(m, METHODS_BACKBONE) for m in BASELINES]
+    design += [(MAIN_STEM, b) for b in BACKBONES]
+    design += [(f"worldwise_{t}", HERO_BACKBONE) for t, _ in ABLATIONS]
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["experiment", "backbone", "mode", "epoch"] + METRIC_COLS)
+        for stem, b in design:
+            r = load(stem, b)
+            if r is None:
+                w.writerow([stem, b, args.mode, "—"] + ["—"] * len(METRIC_COLS))
+            else:
+                w.writerow([stem, b, args.mode, r.get("epoch", "?")]
+                           + [r.get(c, "") for c in METRIC_COLS])
     print(f"\nCSV → {csv_path}")
 
 
