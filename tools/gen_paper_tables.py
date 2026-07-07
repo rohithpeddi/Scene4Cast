@@ -68,8 +68,9 @@ COLS = (
 )
 
 
-def load_row(results_dir, stem, mode, backbone, version, select, sel_metric):
-    path = os.path.join(results_dir, f"{stem}_{mode}_{backbone}_{version}_metrics.jsonl")
+def _load_row_jsonl(results_dir, exp, select, sel_metric):
+    """Training-time metrics (LAST-FRAME-ONLY — optimistically biased)."""
+    path = os.path.join(results_dir, f"{exp}_metrics.jsonl")
     if not os.path.exists(path):
         return None
     rows = []
@@ -85,6 +86,33 @@ def load_row(results_dir, stem, mode, backbone, version, select, sel_metric):
     if not rows:
         return None
     return rows[-1] if select == "last" else max(rows, key=lambda r: r.get(sel_metric, 0.0))
+
+
+def _load_row_reeval(results_dir, exp):
+    """Corrected all-frame re-evaluation (tools/reeval_test.py output).
+    Flattens reeval_<exp>.json into the same 'wc/R@10'-keyed dict."""
+    path = os.path.join(results_dir, f"reeval_{exp}.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    scheme = data.get("schemes", {}).get("all")
+    if not scheme:
+        return None
+    row = {}
+    for c in ("wc", "nc"):
+        for metric in ("R", "mR", "hR"):
+            for k, v in scheme.get(c, {}).get(metric, {}).items():
+                row[f"{c}/{metric}@{int(k)}"] = v  # json turns int keys into str
+    return row
+
+
+def load_row(results_dir, stem, mode, backbone, version, select, sel_metric,
+             source="jsonl"):
+    exp = f"{stem}_{mode}_{backbone}_{version}"
+    if source == "reeval":
+        return _load_row_reeval(results_dir, exp)
+    return _load_row_jsonl(results_dir, exp, select, sel_metric)
 
 
 def _val(row, col, scale):
@@ -149,27 +177,27 @@ def _render(caption, label, method_rows, groups, scale, decimals):
     return "\n".join(L) + "\n"
 
 
-def main_table(results_dir, mode, version, select, sel_metric, scale, decimals):
+def main_table(results_dir, mode, version, select, sel_metric, scale, decimals, source):
     rows = []
     for stem, name in BASELINES:
         rows.append((name, load_row(results_dir, stem, mode, METHODS_BACKBONE,
-                                    version, select, sel_metric)))
+                                    version, select, sel_metric, source)))
     for bb in WW_BACKBONES:
         name = r"WorldWise\textsubscript{" + BACKBONE_DISPLAY[bb] + "}"
         rows.append((name, load_row(results_dir, MAIN_STEM, mode, bb,
-                                    version, select, sel_metric)))
+                                    version, select, sel_metric, source)))
     groups = [2, 2, len(WW_BACKBONES)]   # STTran pair | DSGDetr pair | WorldWise
     disp = "PredCls" if mode == "predcls" else "SGDet"
     return _render(f"{disp} results on ActionGenome4D.",
                    f"tab:{mode}_main", rows, groups, scale, decimals)
 
 
-def ablation_table(results_dir, mode, version, select, sel_metric, scale, decimals):
+def ablation_table(results_dir, mode, version, select, sel_metric, scale, decimals, source):
     rows = [(r"WorldWise (full)",
-             load_row(results_dir, MAIN_STEM, mode, HERO, version, select, sel_metric))]
+             load_row(results_dir, MAIN_STEM, mode, HERO, version, select, sel_metric, source))]
     for stem, name in ABLATIONS:
         rows.append((name, load_row(results_dir, f"worldwise_{stem}", mode, HERO,
-                                    version, select, sel_metric)))
+                                    version, select, sel_metric, source)))
     groups = [1, len(ABLATIONS)]         # full config | ablations
     disp = "PredCls" if mode == "predcls" else "SGDet"
     return _render(f"Component-wise ablation of WorldWise ({disp}, DINOv3-L).",
@@ -196,6 +224,10 @@ def main():
     ap.add_argument("--sel-metric", default="wc/R@20")
     ap.add_argument("--scale", type=float, default=100.0)
     ap.add_argument("--decimals", type=int, default=2)
+    ap.add_argument("--source", default="jsonl", choices=["jsonl", "reeval"],
+                    help="jsonl = training-time metrics (LAST-FRAME-ONLY, biased); "
+                         "reeval = corrected all-frame re-evaluation "
+                         "(results/reeval_<exp>.json from tools/reeval_test.py)")
     args = ap.parse_args()
 
     modes = ["predcls", "sgdet"] if args.mode == "all" else [args.mode]
@@ -204,7 +236,7 @@ def main():
     for mode in modes:
         for kind, fn in (("main", main_table), ("ablation", ablation_table)):
             tex = fn(args.results_dir, mode, args.version, args.select,
-                     args.sel_metric, args.scale, args.decimals)
+                     args.sel_metric, args.scale, args.decimals, args.source)
             path = os.path.join(args.out, f"{mode}_{kind}.tex")
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(PREAMBLE_NOTE + tex)
