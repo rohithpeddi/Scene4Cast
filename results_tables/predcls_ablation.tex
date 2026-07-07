@@ -18,18 +18,18 @@
 \cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}\cmidrule(lr){11-13}
 \textbf{Method} & R@10 & R@20 & R@50 & R@10 & R@20 & R@50 & mR@10 & mR@20 & mR@50 & mR@10 & mR@20 & mR@50 \\
 \midrule
-WorldWise (full) & 65.85 & 68.89 & 68.90 & 80.65 & 94.28 & 99.67 & 43.59 & 49.74 & 49.74 & 65.01 & 82.50 & 97.42 \\
+WorldWise (full) & 63.37 & 69.17 & 69.23 & 74.50 & 92.62 & 99.52 & 40.11 & 49.47 & 49.66 & 60.67 & 81.75 & 95.17 \\
 \addlinespace
-$+$ VLM supervision ($\lambda_{\text{vlm}}{=}0.2$) & 62.13 & 65.12 & 65.12 & 77.43 & 92.63 & 99.51 & 36.34 & 41.05 & 41.05 & 57.26 & 78.13 & 96.96 \\
-$\tau{=}0.75$ (mR-max) & 64.27 & 67.23 & 67.24 & 78.57 & 93.57 & 99.61 & \cellcolor{bestcol}\textbf{45.21} & \cellcolor{bestcol}\textbf{51.70} & \cellcolor{bestcol}\textbf{51.71} & \cellcolor{bestcol}\textbf{67.64} & \cellcolor{bestcol}\textbf{85.55} & 98.36 \\
-$-$ logit adjustment & \cellcolor{bestcol}\textbf{66.84} & \cellcolor{bestcol}\textbf{69.88} & \cellcolor{bestcol}\textbf{69.89} & \cellcolor{bestcol}\textbf{81.84} & \cellcolor{bestcol}\textbf{95.48} & 99.73 & 37.27 & 41.68 & 41.69 & 55.77 & 75.68 & 95.75 \\
-$-$ artificial masking & 65.97 & 69.02 & 69.03 & 80.94 & 94.66 & 99.64 & 41.10 & 46.62 & 46.63 & 63.80 & 82.11 & 96.04 \\
-$-$ EMA recon.\ target & 65.72 & 68.72 & 68.73 & 80.36 & 94.65 & 99.67 & 43.23 & 48.81 & 48.81 & 64.68 & 82.09 & 97.20 \\
-$-$ pair geometry & 65.75 & 68.78 & 68.79 & 80.48 & 94.79 & 99.66 & 40.50 & 46.20 & 46.21 & 63.10 & 82.84 & 96.66 \\
+$+$ VLM supervision ($\lambda_{\text{vlm}}{=}0.2$) & 60.67 & 66.23 & 66.28 & 71.69 & 90.64 & 99.29 & 34.57 & 41.54 & 41.63 & 52.81 & 76.02 & \cellcolor{bestcol}\textbf{96.57} \\
+$\tau{=}0.75$ (mR-max) & 62.04 & 67.76 & 67.81 & 72.47 & 91.33 & 99.44 & \cellcolor{bestcol}\textbf{42.33} & \cellcolor{bestcol}\textbf{52.84} & \cellcolor{bestcol}\textbf{53.06} & \cellcolor{bestcol}\textbf{65.44} & \cellcolor{bestcol}\textbf{83.43} & 95.99 \\
+$-$ logit adjustment & \cellcolor{bestcol}\textbf{64.71} & \cellcolor{bestcol}\textbf{70.52} & \cellcolor{bestcol}\textbf{70.58} & \cellcolor{bestcol}\textbf{76.28} & \cellcolor{bestcol}\textbf{93.97} & \cellcolor{bestcol}\textbf{99.69} & 34.46 & 41.65 & 41.79 & 49.58 & 74.61 & 94.46 \\
+$-$ artificial masking & 64.16 & 70.02 & 70.07 & 75.16 & 93.15 & 99.55 & 39.77 & 48.95 & 49.15 & 59.97 & 81.22 & 94.59 \\
+$-$ EMA recon.\ target & 63.47 & 69.23 & 69.28 & 74.42 & 92.79 & 99.54 & 39.49 & 48.98 & 49.16 & 60.68 & 81.61 & 95.96 \\
+$-$ pair geometry & 63.56 & 69.30 & 69.36 & 74.48 & 92.94 & 99.59 & 37.61 & 46.52 & 46.70 & 58.74 & 80.84 & 96.00 \\
 $-$ object spatial enc. & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
-$-$ ego-motion enc. & 65.96 & 69.00 & 69.01 & 80.98 & 94.71 & 99.66 & 41.49 & 46.78 & 46.78 & 64.32 & 82.02 & 97.36 \\
-$-$ object motion enc. & 66.26 & 69.30 & 69.31 & 80.91 & 94.78 & 99.69 & 42.44 & 48.05 & 48.06 & 64.23 & 81.07 & 96.25 \\
-$-$ temporal edge attn. & 64.37 & 67.42 & 67.43 & 80.16 & 94.88 & \cellcolor{bestcol}\textbf{99.75} & 42.78 & 48.43 & 48.44 & 64.31 & 83.24 & \cellcolor{bestcol}\textbf{98.70} \\
+$-$ ego-motion enc. & 63.98 & 69.77 & 69.83 & 74.90 & 93.07 & 99.53 & 38.52 & 47.45 & 47.62 & 59.69 & 81.39 & 95.38 \\
+$-$ object motion enc. & 63.71 & 69.50 & 69.56 & 74.91 & 93.01 & 99.59 & 39.69 & 48.95 & 49.15 & 59.61 & 79.96 & 94.92 \\
+$-$ temporal edge attn. & 62.56 & 68.29 & 68.34 & 73.97 & 92.64 & 99.62 & 40.00 & 49.41 & 49.61 & 60.24 & 81.83 & 96.08 \\
 \bottomrule
 \end{tabular}}
 \end{table}
