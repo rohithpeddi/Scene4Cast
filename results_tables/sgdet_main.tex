@@ -1,0 +1,32 @@
+% Requires in your preamble:
+%   \usepackage{booktabs}
+%   \usepackage{amsmath}     % for \text in ablation labels
+%   \usepackage[table]{xcolor}
+%   \usepackage{graphicx}   % for \resizebox
+%   \definecolor{bestcol}{RGB}{213,232,212}  % light green highlight
+\begin{table}[t]
+\centering
+\caption{SGDet results on ActionGenome4D.}
+\label{tab:sgdet_main}
+\setlength{\tabcolsep}{4pt}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{l cccccc cccccc}
+\toprule
+& \multicolumn{6}{c}{\textbf{Recall (R@K)}} & \multicolumn{6}{c}{\textbf{Mean Recall (mR@K)}} \\
+\cmidrule(lr){2-7}\cmidrule(lr){8-13}
+& \multicolumn{3}{c}{\textit{With Constraint}} & \multicolumn{3}{c}{\textit{No Constraint}} & \multicolumn{3}{c}{\textit{With Constraint}} & \multicolumn{3}{c}{\textit{No Constraint}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}\cmidrule(lr){11-13}
+\textbf{Method} & R@10 & R@20 & R@50 & R@10 & R@20 & R@50 & mR@10 & mR@20 & mR@50 & mR@10 & mR@20 & mR@50 \\
+\midrule
+W-STTran & \cellcolor{bestcol}\textbf{43.76} & \cellcolor{bestcol}\textbf{59.83} & 70.75 & 11.24 & 16.51 & 31.61 & 9.68 & 20.90 & 33.20 & 3.54 & 13.60 & 31.00 \\
+W-STTran\textsuperscript{++} & 43.45 & 59.45 & 70.37 & 11.25 & 16.50 & 31.60 & 8.92 & 18.99 & 29.77 & 3.58 & 13.55 & 30.95 \\
+\addlinespace
+W-DSGDetr & 43.73 & 59.75 & \cellcolor{bestcol}\textbf{70.85} & 11.24 & 16.53 & 31.60 & 9.94 & 21.04 & 33.95 & 3.59 & 13.62 & 30.99 \\
+W-DSGDetr\textsuperscript{++} & 43.44 & 59.59 & 70.64 & 11.27 & 16.53 & 31.61 & 9.90 & 22.02 & 36.17 & 3.61 & 13.65 & 31.00 \\
+\addlinespace
+WorldWise\textsubscript{DINOv2-B} & 40.31 & 55.81 & 66.95 & \cellcolor{bestcol}\textbf{41.19} & \cellcolor{bestcol}\textbf{61.54} & 85.24 & \cellcolor{bestcol}\textbf{13.02} & \cellcolor{bestcol}\textbf{27.73} & \cellcolor{bestcol}\textbf{43.48} & \cellcolor{bestcol}\textbf{29.12} & \cellcolor{bestcol}\textbf{42.27} & \cellcolor{bestcol}\textbf{66.37} \\
+WorldWise\textsubscript{DINOv2-L} & 39.59 & 54.92 & 67.04 & 40.13 & 60.13 & \cellcolor{bestcol}\textbf{86.32} & 11.39 & 24.45 & 38.43 & 26.21 & 39.78 & 62.00 \\
+WorldWise\textsubscript{DINOv3-L} & 37.62 & 54.74 & 68.56 & 38.52 & 59.38 & 85.74 & 9.62 & 23.26 & 40.52 & 24.70 & 41.45 & 66.00 \\
+\bottomrule
+\end{tabular}}
+\end{table}

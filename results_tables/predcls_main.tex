@@ -1,0 +1,32 @@
+% Requires in your preamble:
+%   \usepackage{booktabs}
+%   \usepackage{amsmath}     % for \text in ablation labels
+%   \usepackage[table]{xcolor}
+%   \usepackage{graphicx}   % for \resizebox
+%   \definecolor{bestcol}{RGB}{213,232,212}  % light green highlight
+\begin{table}[t]
+\centering
+\caption{PredCls results on ActionGenome4D.}
+\label{tab:predcls_main}
+\setlength{\tabcolsep}{4pt}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{l cccccc cccccc}
+\toprule
+& \multicolumn{6}{c}{\textbf{Recall (R@K)}} & \multicolumn{6}{c}{\textbf{Mean Recall (mR@K)}} \\
+\cmidrule(lr){2-7}\cmidrule(lr){8-13}
+& \multicolumn{3}{c}{\textit{With Constraint}} & \multicolumn{3}{c}{\textit{No Constraint}} & \multicolumn{3}{c}{\textit{With Constraint}} & \multicolumn{3}{c}{\textit{No Constraint}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}\cmidrule(lr){8-10}\cmidrule(lr){11-13}
+\textbf{Method} & R@10 & R@20 & R@50 & R@10 & R@20 & R@50 & mR@10 & mR@20 & mR@50 & mR@10 & mR@20 & mR@50 \\
+\midrule
+W-STTran & 63.45 & 66.50 & 66.51 & 78.51 & 93.80 & 99.72 & 33.00 & 38.16 & 38.17 & 50.70 & 75.71 & 96.05 \\
+W-STTran\textsuperscript{++} & 63.63 & 66.55 & 66.57 & 79.40 & 94.54 & 99.69 & 30.93 & 35.03 & 35.04 & 47.48 & 69.39 & 92.81 \\
+\addlinespace
+W-DSGDetr & 63.94 & 66.94 & 66.95 & 79.40 & 94.37 & 99.75 & 31.21 & 35.17 & 35.18 & 46.99 & 71.99 & 95.18 \\
+W-DSGDetr\textsuperscript{++} & 63.71 & 66.70 & 66.71 & 79.35 & 94.11 & \cellcolor{bestcol}\textbf{99.75} & 33.89 & 38.35 & 38.36 & 53.08 & 72.66 & 95.33 \\
+\addlinespace
+WorldWise\textsubscript{DINOv2-B} & 65.06 & 68.03 & 68.04 & 80.33 & \cellcolor{bestcol}\textbf{94.64} & 99.72 & 40.01 & 44.91 & 44.92 & 64.18 & 81.81 & \cellcolor{bestcol}\textbf{97.62} \\
+WorldWise\textsubscript{DINOv2-L} & 65.58 & 68.55 & 68.56 & 80.12 & 94.37 & 99.64 & 40.30 & 45.62 & 45.63 & 64.85 & 82.09 & 96.14 \\
+WorldWise\textsubscript{DINOv3-L} & \cellcolor{bestcol}\textbf{65.85} & \cellcolor{bestcol}\textbf{68.89} & \cellcolor{bestcol}\textbf{68.90} & \cellcolor{bestcol}\textbf{80.65} & 94.28 & 99.67 & \cellcolor{bestcol}\textbf{43.59} & \cellcolor{bestcol}\textbf{49.74} & \cellcolor{bestcol}\textbf{49.74} & \cellcolor{bestcol}\textbf{65.01} & \cellcolor{bestcol}\textbf{82.50} & 97.42 \\
+\bottomrule
+\end{tabular}}
+\end{table}
