@@ -9,9 +9,9 @@ and a tuned tail-aware objective.
 
 **The main configuration is the round-2 winner "v2e"** (experiment stem
 `worldwise_v2e`): MWAE core + pair geometry + τ=0.5 logit adjustment +
-**no noisy VLM supervision** (λ_vlm=0) + 0.3 artificial masking. On predcls it
-beats every baseline on R@20 (0.68 vs 0.67), mR@20 (0.50 vs 0.38), hR@20
-(0.57 vs 0.49) *and* occluded-pair recall — see `docs/DECISION_LOG.md`.
+**no noisy VLM supervision** (λ_vlm=0) + 0.3 artificial masking. See
+`docs/DECISION_LOG.md` for how it was selected and the "Measured results"
+section below for the final campaign numbers.
 
 Model: [lib/supervised/worldwise/worldwise.py](../lib/supervised/worldwise/worldwise.py) ·
 Loss: [loss.py](../lib/supervised/worldwise/loss.py) →
@@ -122,3 +122,40 @@ architecture.**
    supervision on unseen pairs (baselines keep λ_vlm=0.2).
 4. Tail-aware logit adjustment (τ=0.5).
 5. Explicit pair geometry in relation tokens.
+
+## Measured results
+
+Final campaign, seed 0, best-wc/R@20 epoch per cell. Full tables:
+`results_tables/{predcls,sgdet}_{main,ablation}.tex` (regenerate with
+`python tools/gen_paper_tables.py`). Values ×100.
+
+**PredCls — WorldWise wins the ladder cleanly.** @ DINOv3-L: wc R@20 **68.9**
+(best baseline 66.9), wc mR@20 **49.7** (best baseline 38.4), hR@20 ≈ 57.8
+(vs ≈ 48.7). The gain holds across backbones (DINOv2-B 68.0 / 44.9,
+DINOv2-L 68.6 / 45.6, DINOv3-L 68.9 / 49.7 R/mR@20) — DINOv3-L is strongest.
+
+**SGDet — a different trade, read the right columns.** WorldWise *does not*
+win with-constraint R@20 (54.7–55.8 vs baselines' ~59.8) but wins
+with-constraint mR@20 (27.7 vs ~22) and dominates **no-constraint** (nc R@20
+≈ 61 vs baselines' ≈ 16.5; nc mR@20 ≈ 42 vs ≈ 13.6). Present sgdet on mR and
+no-constraint, not wc-R. Backbone order **inverts** here: DINOv2-B is the
+strongest WorldWise backbone (55.8 / 27.7), decreasing with larger backbones
+— the frozen ViT does not help once the detector drives localization.
+
+**Ablation takeaways** (@ DINOv3-L, vs the full config):
+
+| Component removed / changed | PredCls effect | Verdict |
+|---|---|---|
+| + noisy VLM supervision back (λ_vlm 0→0.2) | R −3.8, mR −8.7 | λ_vlm=0 strongly confirmed (predcls); mixed on sgdet (slightly helps wc-R) |
+| τ 0.5 → 0.75 | R −1.7, **mR +2.0** | Pareto point — the published mR-max operating config |
+| − logit adjustment | **R +1.0**, mR −8.1 | The R↔mR knob; drop it only if R is the sole target |
+| − artificial masking | R ≈0, mR −3.1 | Masking is a real tail-class augmentation — keep 0.3 |
+| − pair geometry (I-1) | R ≈0, mR −3.5 | I-1 justified — it lifts tail recall on the v2e base |
+| − ego-motion encoder | R ≈0, mR −3.0 | Contributes to tail recall |
+| − object motion encoder | R +0.4, mR −1.7 | Marginal — smallest contribution of the encoders |
+| − temporal edge attention | R −1.5, mR −1.3 | Helps both mildly |
+| − ObjectSpatialEncoder | *no result* | **Cell missing — needs a rerun (see RUN_WSGG.md)** |
+
+Net reading: the tail-recall (mR) gains come from the loss recipe
+(λ_vlm=0, logit adjustment, masking) plus pair geometry and ego-motion;
+object-motion is the one encoder that could be dropped with little cost.

@@ -132,7 +132,7 @@ July 2026 fixes and are not comparable):
   `vispair/*` and `occpair/*` metrics, all loss sub-terms (`loss/*`),
   `epoch_time_s`, `peak_vram_gb`.
 
-Render the three tables (best epoch by wc/R@20 per cell):
+Render the three markdown tables (best epoch by wc/R@20 per cell):
 
 ```bash
 python tools/aggregate_results.py --mode predcls --tiers   # Tables A, B, C + CSV
@@ -143,6 +143,22 @@ python tools/report_gate_metrics.py --mode predcls         # per-head + occlusio
 - **Table A** — 4 baselines + WorldWise (v2e) @ resnet50 (the ladder) ·
   **Table B** — WorldWise across backbones · **Table C** — component-wise
   ablations @ dinov3l (each row = main config minus/altering one thing).
+
+**Paper-ready LaTeX tables** (the 4-way R/mR × with/no-constraint layout):
+
+```bash
+python tools/gen_paper_tables.py   # → results_tables/{predcls,sgdet}_{main,ablation}.tex + preview.tex
+```
+
+Compile a proof: `cd results_tables && pdflatex preview.tex`. A one-paragraph
+reading of the current numbers (predcls win, sgdet trade, ablation effects,
+backbone inversion) is in [WORLDWISE.md](WORLDWISE.md#measured-results).
+
+> **Known gap:** the `abl_nospatial` ablation (`− ObjectSpatialEncoder`)
+> produced no result in either mode (blank row in the ablation tables). Check
+> `logs/grid/worldwise_abl_nospatial_*_dinov3l.log` and rerun the two cells:
+> `python tools/run_grid_multigpu.py --gpus 0 1 2 --stages abl` (skip-detect
+> leaves the completed ablations alone).
 
 ## 6. Decision log
 

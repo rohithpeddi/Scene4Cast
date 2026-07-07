@@ -20,6 +20,15 @@ loss keeps the original noisy-label recipe (λ_vlm = 0.2 on unseen pairs),
 which WorldWise-v2e deliberately abandons — that asymmetry is a *finding*
 (the noisy supervision hurts; see `docs/DECISION_LOG.md`), not an oversight.
 
+**Where the baselines remain competitive.** On PredCls they are clearly below
+WorldWise on every metric (wc R@20 ≈ 66.9 vs 68.9, wc mR@20 ≈ 38 vs 50). On
+**SGDet, however, the baselines win with-constraint R@K** (wc R@20 ≈ 59.8 vs
+WorldWise's ~55) — the LKS zero-order-hold memory is a strong, low-variance
+prior when the detector already drives localization. WorldWise's SGDet
+advantage is on mean-recall and the no-constraint protocol, not wc-R. Report
+SGDet with all four column groups so this trade is visible (see the tables in
+`results_tables/` and [WORLDWISE.md](WORLDWISE.md#measured-results)).
+
 ## Task & I/O contract
 
 Given a video of detected objects with 3D oriented bounding boxes (OBBs) in a
