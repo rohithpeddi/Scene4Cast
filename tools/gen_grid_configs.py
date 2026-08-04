@@ -28,7 +28,7 @@ import os
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "worldwise"]
+METHODS = ["w_sttran", "w_sttran_pp", "w_dsgdetr", "w_dsgdetr_pp", "w_usg", "worldwise"]
 BACKBONES = ["resnet50", "dinov2b", "dinov2l", "dinov3l"]
 MODES = ["predcls", "sgdet"]
 HERO_BACKBONE = "dinov3l"        # WorldWise⁺ tiers run here
@@ -133,6 +133,16 @@ WORLDWISE_EXTRA = [
     ("lambda_stability", 0.0),
 ]
 
+# W-USG-only keys — external baseline (USG-Par relation machinery on the
+# WSGG substrate). Same relation supervision as the ladder baselines
+# (lambda_vlm stays at the COMMON 0.2); adds only the USG-specific
+# architecture depth and the text-centric alignment weight.
+W_USG_EXTRA = [
+    ("n_usg_decoder_layers", 2),
+    ("lambda_align", 0.1),
+    ("align_temperature", 0.07),
+]
+
 # Component-wise ablations of the MAIN (v2e) configuration — one change per
 # tier, all @ the hero backbone. Overrides apply on top of WORLDWISE_EXTRA.
 # Three tiers keep their historical names so already-trained cells are reused
@@ -204,6 +214,8 @@ def render(method, mode, backbone, tier=None):
         merged["predicate_priors_path"] = merged["predicate_priors_path"].format(mode=mode)
         if tier:
             merged.update(ABLATION_TIERS[tier])
+    elif method == "w_usg":
+        merged.update(dict(W_USG_EXTRA))
     merged.update({
         "method_name": method,
         "mode": mode,

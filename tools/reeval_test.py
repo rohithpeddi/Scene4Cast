@@ -61,6 +61,8 @@ def build_model(conf, test_dataset, device):
         from lib.supervised.baselines.w_dsgdetr.w_dsgdetr import WDSGDetr as C
     elif m == "w_dsgdetr_pp":
         from lib.supervised.baselines.w_dsgdetr.w_dsgdetr_pp import WDSGDetrPP as C
+    elif m == "w_usg":
+        from lib.supervised.baselines.w_usg.w_usg import WUSG as C
     elif m == "worldwise":
         from lib.supervised.worldwise.worldwise import WorldWise as C
     else:

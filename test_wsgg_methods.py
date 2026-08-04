@@ -149,6 +149,25 @@ class TestWDSGDetrPP(TestWDSGDetr):
 
 
 # ============================================================================
+# W-USG (External baseline: USG-Par relation machinery on the WSGG substrate)
+# ============================================================================
+
+class TestWUSG(TestWSTTran):
+    """W-USG tester — same batched API as W-STTran, only model differs."""
+
+    def init_model(self):
+        from lib.supervised.baselines.w_usg.w_usg import WUSG
+
+        self._model = WUSG(
+            config=self._conf,
+            num_object_classes=len(self._test_dataset.object_classes),
+            attention_class_num=len(self._test_dataset.attention_relationships),
+            spatial_class_num=len(self._test_dataset.spatial_relationships),
+            contact_class_num=len(self._test_dataset.contacting_relationships),
+        ).to(self._device)
+
+
+# ============================================================================
 # WorldWise (MWAE-based — full proposed method with ablation support)
 # ============================================================================
 
@@ -206,6 +225,8 @@ METHOD_MAP = {
     "w_sttran_pp": TestWSTTranPP,
     "w_dsgdetr": TestWDSGDetr,
     "w_dsgdetr_pp": TestWDSGDetrPP,
+    # External baseline (beside the ladder): USG-Par-style relation decoding
+    "w_usg": TestWUSG,
     # WorldWise (Dino backbones — ablation via config flags)
     "worldwise": TestWorldWise,
 }

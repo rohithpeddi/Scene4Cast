@@ -51,6 +51,7 @@ def main():
     from lib.supervised.baselines.w_sttran.w_sttran_pp import WSTTranPP
     from lib.supervised.baselines.w_dsgdetr.w_dsgdetr import WDSGDetr
     from lib.supervised.baselines.w_dsgdetr.w_dsgdetr_pp import WDSGDetrPP
+    from lib.supervised.baselines.w_usg.w_usg import WUSG
     from lib.supervised.worldwise.worldwise import WorldWise
 
     rows = []
@@ -74,6 +75,9 @@ def main():
             "use_cross_object_retrieval": True,
             "use_energy_refinement": True,
         }),
+        # External baseline — beside the ladder, excluded from the
+        # monotonicity check below (rows[:5] covers the 5-tier ladder only)
+        ("w_usg (external)", WUSG, {}),
     ]
     for name, cls, flags in ladder:
         model = cls(shared_config(**flags))

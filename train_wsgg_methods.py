@@ -203,6 +203,38 @@ class TrainWDSGDetrPP(TrainWDSGDetr):
 
 
 # ============================================================================
+# W-USG (External baseline: USG-Par relation machinery on the WSGG substrate)
+# ============================================================================
+
+class TrainWUSG(TrainWSTTran):
+    """W-USG trainer — same batched API as W-STTran; model and loss differ.
+
+    Not a ladder tier: USG-Par-style relation decoder + text-centric
+    alignment replace the SpatialGNN + TemporalEdgeAttention stack.
+    """
+
+    def init_model(self):
+        from lib.supervised.baselines.w_usg.w_usg import WUSG
+
+        self._model = WUSG(
+            config=self._conf,
+            num_object_classes=len(self._object_classes),
+            attention_class_num=len(self._train_dataset.attention_relationships),
+            spatial_class_num=len(self._train_dataset.spatial_relationships),
+            contact_class_num=len(self._train_dataset.contacting_relationships),
+        ).to(self._device)
+
+    def init_loss_fn(self):
+        from lib.supervised.baselines.w_usg.loss import WUSGLoss
+        self._loss_fn = WUSGLoss(
+            lambda_vlm=self._conf.lambda_vlm,
+            label_smoothing=self._conf.label_smoothing_vlm,
+            mode=self._conf.mode,
+            lambda_align=getattr(self._conf, 'lambda_align', 0.1),
+        )
+
+
+# ============================================================================
 # WorldWise (MWAE-based — full proposed method with ablation support)
 # ============================================================================
 
@@ -327,6 +359,8 @@ METHOD_MAP = {
     "w_sttran_pp": TrainWSTTranPP,
     "w_dsgdetr": TrainWDSGDetr,
     "w_dsgdetr_pp": TrainWDSGDetrPP,
+    # External baseline (beside the ladder): USG-Par-style relation decoding
+    "w_usg": TrainWUSG,
     # WorldWise (full proposed method — MWAE + tail-aware loss)
     "worldwise": TrainWorldWise,
 }

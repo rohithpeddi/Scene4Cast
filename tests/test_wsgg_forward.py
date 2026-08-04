@@ -126,6 +126,49 @@ def test_baseline_forwards():
         print(f"  OK {cls.__name__}")
 
 
+def test_wusg_forward_and_loss():
+    from lib.supervised.baselines.w_usg.w_usg import WUSG
+    from lib.supervised.baselines.w_usg.loss import WUSGLoss
+
+    cfg = make_config()
+    batch = make_batch()
+    gt_labels = torch.randint(0, NUM_CLASSES, (T, N))
+
+    model = WUSG(cfg, NUM_CLASSES, N_ATT, N_SPA, N_CON).eval()
+    with torch.no_grad():
+        out = _run(model, batch)
+        check_outputs(out, "WUSG")
+        assert tuple(out["align_logits"].shape) == (T, N, NUM_CLASSES)
+        assert torch.isfinite(out["align_logits"]).all()
+        check_outputs(_run(model, dict(batch, camera_pose_seq=None)), "WUSG[no-cam]")
+        check_outputs(
+            _run(model, batch, node_labels_seq=gt_labels), "WUSG[gt-labels]",
+        )
+
+    # Loss: alignment term present and backprop-clean
+    model = model.train()
+    out = _run(model, batch)
+    loss_fn = WUSGLoss(
+        lambda_vlm=0.2, label_smoothing=0.2, mode="predcls", lambda_align=0.1,
+    )
+    losses = loss_fn(
+        predictions=out,
+        gt_attention=torch.randint(0, N_ATT, (T, K)),
+        gt_spatial=(torch.rand(T, K, N_SPA) > 0.7).float(),
+        gt_contacting=(torch.rand(T, K, N_CON) > 0.7).float(),
+        pair_valid=batch["pair_valid"],
+        visibility_mask=batch["visibility_mask_seq"],
+        person_idx=batch["person_idx_seq"],
+        object_idx=batch["object_idx_seq"],
+        valid_mask=batch["valid_mask_seq"],
+        gt_node_labels=gt_labels,
+    )
+    assert torch.isfinite(losses["total"]), "W-USG loss total is NaN/Inf"
+    assert "alignment_loss" in losses, "lambda_align>0 must emit alignment_loss"
+    losses["total"].backward()
+    print(f"  OK WUSG + WUSGLoss total={losses['total'].item():.4f}")
+
+
 def test_ladder_param_monotonicity():
     from lib.supervised.baselines.w_sttran.w_sttran import WSTTran
     from lib.supervised.baselines.w_sttran.w_sttran_pp import WSTTranPP
@@ -262,6 +305,7 @@ def test_worldwise_loss():
 if __name__ == "__main__":
     torch.manual_seed(0)
     test_baseline_forwards()
+    test_wusg_forward_and_loss()
     test_ladder_param_monotonicity()
     test_worldwise_plugins()
     test_worldwise_loss()
