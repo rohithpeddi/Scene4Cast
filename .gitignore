@@ -2,6 +2,11 @@ dataloader/*.pkl
 .DS_Store
 .idea/*
 
+checkpoints/
+wandb/
+results/
+results_bak/
+results_tables/
 *.synctex*
 *.synctex.gz
 *.aux
