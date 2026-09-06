@@ -58,6 +58,12 @@ def parse_args():
         help="Filter dynamic scenes by mode: train, test, or both (default: both)",
     )
     parser.add_argument(
+        "--sync-mode",
+        choices=["upload", "download", "sync"],
+        default="upload",
+        help="Synchronization direction: upload (default), download, or sync (bidirectional)",
+    )
+    parser.add_argument(
         "--split",
         default="all",
         help=(
@@ -192,13 +198,37 @@ def main():
         client=client,
         local_root=local_root,
         box_root_id=box_folder_id,
-        mode="upload",
+        mode=args.sync_mode,
         workers=args.workers,
         dry_run=args.dry_run,
         verbose=args.verbose,
     )
 
-    service.upload_file_map(file_entries, target_box_root_id=box_folder_id)
+    if args.sync_mode in ("upload", "sync"):
+        service.upload_file_map(file_entries, target_box_root_id=box_folder_id)
+
+    if args.sync_mode in ("download", "sync"):
+        target_sub_id = service.find_box_path(box_folder_id, args.target_subdir) if args.target_subdir else box_folder_id
+        if target_sub_id:
+            print(f"\nScanning remote Box folder for download: {args.target_subdir or box_folder_id}...")
+            box_files = service.get_box_files(target_sub_id, current_rel_prefix=args.target_subdir or "")
+            to_download = []
+            for rel, (size, fid) in box_files.items():
+                parts = Path(rel).parts
+                # Check video ID from path
+                vid = parts[1] if len(parts) > 1 and parts[0] == args.target_subdir else parts[0]
+                v_mode = resolver.get_mode(vid)
+                if args.mode != "both" and v_mode != args.mode:
+                    continue
+                if not resolver.matches_split_filter(vid, splits):
+                    continue
+                loc_p = local_root / rel
+                if not loc_p.exists() or loc_p.stat().st_size != size:
+                    to_download.append((rel, size, fid))
+
+            print(f"Remote files matching criteria: {len(to_download):,} to download")
+            if not args.dry_run and to_download:
+                service.download_files_list(to_download)
 
 
 if __name__ == "__main__":

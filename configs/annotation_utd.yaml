@@ -19,6 +19,32 @@
 ag_root_directory: /data/rohith/ag
 dynamic_scene_dir_path: /data3/rohith/ag/ag4D/dynamic_scenes/pi3_dynamic
 
+# --- Box Cloud Synchronization Settings ---
+box_credentials_path: "/data/rohith/box_cred.json"
+box_sync:
+  root_folder_id: "380446756239" # All Files/UTD-IITD/WorldSGG/WorldSGGDataset
+  local_root: "/data/rohith/ag"
+  datasets:
+    annotations:
+      folder_id: "367501057528"
+      local_path: "annotations"
+    world4d_rel_annotations:
+      folder_id: "380446756239"
+      file_id: "2449163179187"
+      local_path: "world4d_rel_annotations.zip"
+    world_annotations:
+      folder_id: "415504806441"
+      local_path: "world_annotations"
+    scene4cast_data:
+      folder_id: "380446756239"
+      local_path: "world_annotations"
+      files:
+        bbox_annotations_3d_final.zip: "2449163646313"
+        bbox_annotations_3d_obb_camera.zip: "2449160296239"
+    dynamic_scenes:
+      folder_id: "415500109453"
+      local_path: "ag4D/dynamic_scenes"
+
 # --- Dataset Phase ---
 phase: "test"  # Options: "train" or "test"
 

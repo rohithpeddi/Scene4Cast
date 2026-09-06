@@ -1,0 +1,64 @@
+# =============================================================================
+# Box Dataset Synchronization Configuration Template
+# =============================================================================
+# Use this configuration file on any machine/cluster to download, upload, or
+# bidirectionally sync dataset items between Box cloud storage and local disks.
+#
+# Usage:
+#   # Download annotations to your local machine:
+#   python scripts/sync_all_datasets_box.py --config configs/box_sync_template.yaml --mode download
+#
+#   # Sync a specific dataset (e.g. annotations):
+#   python scripts/sync_all_datasets_box.py --config configs/box_sync_template.yaml --item 1 --mode download
+#
+#   # Dry run to inspect files that would be transferred:
+#   python scripts/sync_all_datasets_box.py --config configs/box_sync_template.yaml --mode download --dry-run
+# =============================================================================
+
+# --- Box Authentication Credentials ---
+# Path to your box_cred.json file containing:
+# { "client_id": "...", "client_secret": "...", "user_id": "..." }
+box_credentials_path: "box_cred.json"
+
+# Optional proxy URL for clusters with restricted internet access:
+# box_proxy: "http://proxy.mycluster.edu:3128"
+
+# --- Box Synchronization Settings ---
+box_sync:
+  # Target Box unified dataset root folder (WorldSGGDataset on UT Dallas Box)
+  root_folder_id: "380446756239"
+
+  # Base local root directory on THIS machine where datasets should be stored.
+  # Subfolder paths below resolve relative to this directory (unless absolute paths are provided).
+  local_root: "/data/rohith/ag"
+
+  # Dataset definitions and mappings:
+  datasets:
+    # 1. Main 2D & 3D Annotations (ag_annotations)
+    annotations:
+      folder_id: "367501057528"
+      local_path: "annotations"
+
+    # 2. WorldWise Training Annotations (world4d_rel_annotations.zip)
+    world4d_rel_annotations:
+      folder_id: "380446756239"
+      file_id: "2449163179187"
+      local_path: "world4d_rel_annotations.zip"
+
+    # 3. World 3D Annotations (bbox_annotations_3d_obb_final & annotation_stats)
+    world_annotations:
+      folder_id: "415504806441"
+      local_path: "world_annotations"
+
+    # 4. Scene4Cast 3D Bounding Box Data
+    scene4cast_data:
+      folder_id: "380446756239"
+      local_path: "world_annotations"
+      files:
+        bbox_annotations_3d_final.zip: "2449163646313"
+        bbox_annotations_3d_obb_camera.zip: "2449160296239"
+
+    # 5. Dynamic Scenes (ag4D)
+    dynamic_scenes:
+      folder_id: "415500109453"
+      local_path: "ag4D/dynamic_scenes"

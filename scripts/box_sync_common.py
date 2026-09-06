@@ -216,7 +216,14 @@ def get_box_client(cfg: Optional[dict] = None, cli_cred: Optional[str] = None) -
 
 
 def _entry(cfg: dict, purpose: str) -> dict:
-    return dict((cfg.get("box_sync", {}) or {}).get(purpose, {}) or {})
+    """Retrieve config entry for a purpose, checking both box_sync.datasets.<purpose> and box_sync.<purpose>."""
+    bs = cfg.get("box_sync", {}) or {}
+    datasets = bs.get("datasets", {}) or {}
+    if purpose in datasets and isinstance(datasets[purpose], dict):
+        return datasets[purpose]
+    if purpose in bs and isinstance(bs[purpose], dict):
+        return bs[purpose]
+    return {}
 
 
 def box_sync_folder_id(
@@ -225,12 +232,16 @@ def box_sync_folder_id(
     cli: Optional[str] = None,
     fallback: Optional[str] = None,
 ) -> str:
-    """Box folder id for *purpose*: ``cli`` > ``box_sync.<purpose>.folder_id`` > fallback."""
+    """Resolve Box folder ID: cli > config (dataset or purpose) > fallback > '380446756239'."""
     if cli:
         return str(cli)
-    fid = _entry(cfg, purpose).get("folder_id")
+    entry = _entry(cfg, purpose)
+    fid = entry.get("folder_id") or entry.get("root_folder_id")
     if fid:
         return str(fid)
+    root_fid = (cfg.get("box_sync", {}) or {}).get("root_folder_id")
+    if root_fid:
+        return str(root_fid)
     if fallback:
         return str(fallback)
     return "380446756239"
@@ -238,20 +249,56 @@ def box_sync_folder_id(
 
 def box_sync_local_root(
     cfg: dict,
-    purpose: str,
+    purpose: str = "",
     cli: Optional[str] = None,
     fallback: Optional[str] = None,
     key: str = "local_root",
 ) -> Path:
-    """Local root for *purpose*: ``cli`` > ``box_sync.<purpose>.<key>`` > fallback."""
+    """Resolve local directory path: cli > purpose entry path > box_sync.local_root > ag_root_directory > fallback.
+
+    If a purpose entry specifies 'local_path', it is joined with base_root unless already absolute.
+    """
     if cli:
-        return Path(cli)
-    val = _entry(cfg, purpose).get(key)
+        return Path(cli).resolve()
+
+    bs = cfg.get("box_sync", {}) or {}
+    base_root = Path(bs.get("local_root") or cfg.get("ag_root_directory") or fallback or "/data/rohith/ag").resolve()
+
+    if not purpose:
+        return base_root
+
+    entry = _entry(cfg, purpose)
+    # Check explicit full path first
+    val = entry.get(key)
     if val:
-        return Path(val)
+        p = Path(val)
+        return p if p.is_absolute() else (base_root / p).resolve()
+
+    # Check relative local_path
+    rel_path = entry.get("local_path")
+    if rel_path:
+        p = Path(rel_path)
+        return p if p.is_absolute() else (base_root / p).resolve()
+
     if fallback:
-        return Path(fallback)
-    return Path("/data/rohith/ag")
+        return Path(fallback).resolve()
+    return base_root
+
+
+def get_dataset_file_mapping(cfg: dict, purpose: str) -> Dict[str, str]:
+    """Retrieve filename -> file_id mapping for a dataset if defined in config."""
+    entry = _entry(cfg, purpose)
+    files = entry.get("files", {})
+    if isinstance(files, dict):
+        return {str(k): str(v) for k, v in files.items()}
+    if isinstance(files, list):
+        # List of {name: ..., file_id: ...}
+        res = {}
+        for item in files:
+            if isinstance(item, dict) and "name" in item and "file_id" in item:
+                res[item["name"]] = str(item["file_id"])
+        return res
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -650,6 +697,26 @@ class BoxSyncService:
                         pbar.update(1)
 
         print("\n✓ Synchronization complete.")
+
+    def download_files_list(self, to_download: List[Tuple[str, int, str]]):
+        """Download an explicit list of (rel_path, size, file_id) tuples."""
+        if not to_download:
+            return
+        print(f"Starting download of {len(to_download):,} file(s) ({human_size(sum(s for _, s, _ in to_download))})...")
+        with ThreadPoolExecutor(max_workers=self.workers) as ex:
+            futures = {
+                ex.submit(self.download_file, rel, fid): rel
+                for rel, _, fid in to_download
+            }
+            with tqdm(total=len(to_download), unit="file", desc="Downloading") as pbar:
+                for fut in as_completed(futures):
+                    rel = futures[fut]
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        print(f"\n[Error downloading {rel}]: {e}")
+                    pbar.update(1)
+        print("\n✓ Download completed.")
 
     def upload_file_map(
         self,

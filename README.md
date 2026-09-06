@@ -37,14 +37,13 @@
 - **[May 2026]** — ActionGenome4D annotations, trained checkpoints, and VLM evaluation code available upon request by email to [rohith.peddi@utdallas.edu](mailto:rohith.peddi@utdallas.edu)
 - **[Mar 2026]** — Released the [arXiv paper](https://arxiv.org/abs/2603.13185) describing the WorldSGG framework.
 
----
+<!-- --- -->
 
-## 📋 TODO — Upcoming Releases
+<!-- ## 📋 TODO — Upcoming Releases
 
 - [ ] ActionGenome4D dataset annotations
-- [ ] Trained model checkpoints (PWG, MWAE, 4DST)
 - [ ] VLM / MLLM evaluation code
-- [ ] 4D scene reconstruction pipeline code
+- [ ] 4D scene reconstruction pipeline code -->
 
 ---
 
