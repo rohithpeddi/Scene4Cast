@@ -85,6 +85,12 @@ def parse_args():
         help="Number of concurrent transfer workers (default: 1)",
     )
     parser.add_argument(
+        "--zip-threshold",
+        type=int,
+        default=30,
+        help="If folder contains more than this number of files across all subfolders, zip it and transfer the archive (default: 30, 0 to disable)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Show transfer plan without transferring any files",
@@ -146,6 +152,7 @@ def main():
         workers=args.workers,
         dry_run=args.dry_run,
         verbose=args.verbose,
+        zip_threshold=args.zip_threshold,
     )
 
     service.sync(target_rel_path=rel_sync)

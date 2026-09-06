@@ -28,8 +28,11 @@ import argparse
 import json
 import os
 import pickle
+import shutil
+import subprocess
 import sys
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -530,8 +533,76 @@ class VideoSplitResolver:
 
 
 # ---------------------------------------------------------------------------
-# Reusable Box Synchronization Service
+# Reusable Box Synchronization Service & Archive Helpers
 # ---------------------------------------------------------------------------
+
+DEFAULT_ZIP_THRESHOLD = 30
+
+
+def create_zip_archive(source_dir: Path, dest_zip_path: Path, verbose: bool = True) -> Path:
+    """Create a .zip archive of source_dir if it contains > threshold files."""
+    dest_zip_path = Path(dest_zip_path).resolve()
+    source_dir = Path(source_dir).resolve()
+    dest_zip_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_zip = dest_zip_path.with_suffix(".tmp.zip")
+    if temp_zip.exists():
+        temp_zip.unlink()
+
+    if verbose:
+        print(f"  [Zip Archiver] Compressing '{source_dir.name}' into '{dest_zip_path.name}'...")
+
+    # Fast system zip command if available
+    zip_bin = shutil.which("zip")
+    if zip_bin:
+        try:
+            cmd = [zip_bin, "-rq", str(temp_zip), source_dir.name]
+            subprocess.run(cmd, cwd=str(source_dir.parent), check=True)
+            os.replace(temp_zip, dest_zip_path)
+            if verbose:
+                zsize = dest_zip_path.stat().st_size
+                print(f"  [Zip Archiver] Created {dest_zip_path.name} ({human_size(zsize)})")
+            return dest_zip_path
+        except Exception as e:
+            if verbose:
+                print(f"  [Zip Archiver] System zip fallback triggered ({e})...")
+
+    # Python zipfile fallback
+    with zipfile.ZipFile(temp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _, files in os.walk(source_dir):
+            for f in files:
+                full_p = Path(root) / f
+                arcname = full_p.relative_to(source_dir.parent).as_posix()
+                zf.write(full_p, arcname)
+
+    os.replace(temp_zip, dest_zip_path)
+    if verbose:
+        zsize = dest_zip_path.stat().st_size
+        print(f"  [Zip Archiver] Created {dest_zip_path.name} ({human_size(zsize)})")
+    return dest_zip_path
+
+
+def extract_zip_archive(zip_path: Path, dest_dir: Path, verbose: bool = True):
+    """Extract a .zip archive into dest_dir."""
+    zip_path = Path(zip_path).resolve()
+    dest_dir = Path(dest_dir).resolve()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if verbose:
+        print(f"  [Zip Extractor] Extracting '{zip_path.name}' into '{dest_dir}'...")
+
+    unzip_bin = shutil.which("unzip")
+    if unzip_bin:
+        try:
+            cmd = [unzip_bin, "-qo", str(zip_path), "-d", str(dest_dir)]
+            subprocess.run(cmd, check=True)
+            return
+        except Exception as e:
+            if verbose:
+                print(f"  [Zip Extractor] System unzip fallback triggered ({e})...")
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(dest_dir)
+
 
 class BoxSyncService:
     """Core synchronization service between a local path and Box folder."""
@@ -542,9 +613,10 @@ class BoxSyncService:
         local_root: str | Path,
         box_root_id: str,
         mode: str = "upload",
-        workers: int = 8,
+        workers: int = 1,
         dry_run: bool = False,
         verbose: bool = False,
+        zip_threshold: int = DEFAULT_ZIP_THRESHOLD,
     ):
         self.client = client
         self.local_root = Path(local_root).resolve()
@@ -553,6 +625,7 @@ class BoxSyncService:
         self.workers = max(1, workers)
         self.dry_run = dry_run
         self.verbose = verbose
+        self.zip_threshold = zip_threshold
         self._folder_cache: Dict[str, Dict[str, str]] = {}
 
     def _with_retries(self, func, *args, max_attempts: int = 5, **kwargs):
@@ -746,15 +819,132 @@ class BoxSyncService:
 
         self._with_retries(_do_download)
 
+    def sync_zipped_folder(self, full_target: Path, target_rel_path: str = ""):
+        """Zip a folder that has > zip_threshold files and sync the zip file with Box."""
+        folder_name = full_target.name
+        zip_name = f"{folder_name}.zip"
+        local_zip_path = full_target.parent / zip_name
+
+        # Resolve destination Box folder ID
+        dest_box_folder_id = self.box_root_id
+        if full_target.parent != self.local_root:
+            try:
+                dest_rel_dir = full_target.parent.relative_to(self.local_root).as_posix()
+                if dest_rel_dir and dest_rel_dir != ".":
+                    dest_box_folder_id = self.ensure_box_path(self.box_root_id, dest_rel_dir)
+            except ValueError:
+                try:
+                    f_info = self.client.folder(self.box_root_id).get(fields=["id", "name", "parent"])
+                    if f_info.parent and f_info.parent.id and f_info.parent.id != "0":
+                        dest_box_folder_id = f_info.parent.id
+                    else:
+                        dest_box_folder_id = self.box_root_id
+                except Exception:
+                    dest_box_folder_id = self.box_root_id
+
+        # Fetch items in target Box folder
+        try:
+            box_folder = self.client.folder(dest_box_folder_id)
+            box_items = {it.name: it for it in box_folder.get_items(limit=1000, fields=["id", "name", "size"])}
+        except Exception:
+            box_items = {}
+
+        box_zip_item = box_items.get(zip_name)
+
+        if self.mode in ("upload", "sync"):
+            should_create_zip = True
+            if local_zip_path.exists():
+                zip_mtime = local_zip_path.stat().st_mtime
+                folder_mtime = full_target.stat().st_mtime
+                if zip_mtime >= folder_mtime and local_zip_path.stat().st_size > 0:
+                    should_create_zip = False
+                    print(f"Existing archive '{local_zip_path.name}' ({human_size(local_zip_path.stat().st_size)}) is up to date.")
+
+            if should_create_zip:
+                if self.dry_run:
+                    print(f"[Dry Run] Would compress '{full_target}' into '{local_zip_path}'")
+                else:
+                    create_zip_archive(full_target, local_zip_path, verbose=True)
+
+            zip_size = local_zip_path.stat().st_size if local_zip_path.exists() else 0
+
+            print("\n------------------------- PLAN -------------------------")
+            if not box_zip_item or box_zip_item.size != zip_size:
+                print(f"To Upload  : 1 archive file: '{zip_name}' ({human_size(zip_size)})")
+            else:
+                print(f"To Upload  : 0 file(s) (remote '{zip_name}' already matches local size {human_size(zip_size)})")
+            print("--------------------------------------------------------\n")
+
+            if self.dry_run:
+                print("[Dry Run] No files transferred. Exiting.")
+                return
+
+            if not box_zip_item or box_zip_item.size != zip_size:
+                print(f"Uploading '{zip_name}' ({human_size(zip_size)}) to Box folder {dest_box_folder_id}...")
+                self.upload_file(zip_name, zip_size, dest_box_folder_id, local_file_path=local_zip_path)
+                print(f"Upload of '{zip_name}' completed successfully.")
+            else:
+                print(f"Box file '{zip_name}' already up to date ({human_size(box_zip_item.size)}).")
+
+        if self.mode in ("download", "sync"):
+            if box_zip_item:
+                need_download = not local_zip_path.exists() or local_zip_path.stat().st_size != box_zip_item.size
+                print("\n------------------------- PLAN -------------------------")
+                if need_download:
+                    print(f"To Download: 1 archive file: '{zip_name}' ({human_size(box_zip_item.size)})")
+                else:
+                    print(f"To Download: 0 file(s) (local '{zip_name}' already matches Box size {human_size(box_zip_item.size)})")
+                print("--------------------------------------------------------\n")
+
+                if self.dry_run:
+                    print("[Dry Run] No files transferred. Exiting.")
+                    return
+
+                if need_download:
+                    print(f"Downloading '{zip_name}' ({human_size(box_zip_item.size)}) from Box...")
+                    self.download_file(zip_name, box_zip_item.id, dest_file_path=local_zip_path)
+                    print(f"Extracting '{zip_name}' into '{full_target.parent}'...")
+                    extract_zip_archive(local_zip_path, full_target.parent, verbose=True)
+                else:
+                    print(f"Local archive '{zip_name}' already matches Box ({human_size(box_zip_item.size)}).")
+                    if not full_target.exists():
+                        print(f"Extracting '{zip_name}' into '{full_target.parent}'...")
+                        extract_zip_archive(local_zip_path, full_target.parent, verbose=True)
+            else:
+                print(f"Notice: '{zip_name}' not found in Box folder {dest_box_folder_id}.")
+
     def sync(self, target_rel_path: str = ""):
         """Synchronize between local_root and Box folder."""
+        full_target = (self.local_root / target_rel_path).resolve() if target_rel_path else self.local_root
+
         print(f"\n==================================================================")
         print(f" Box Sync: Local [{self.local_root}] <-> Box Folder [{self.box_root_id}]")
         print(f" Target path : '{target_rel_path or '.'}'")
         print(f" Mode        : {self.mode.upper()}")
         print(f" Workers     : {self.workers}")
         print(f" Dry Run     : {self.dry_run}")
+        if self.zip_threshold > 0:
+            print(f" Auto-Zip    : Enabled (threshold > {self.zip_threshold} files)")
         print(f"==================================================================\n")
+
+        # Auto-Zip Rule: If folder has > zip_threshold files in total (considering all subfolders),
+        # zip the folder and upload that zipped version to box
+        if full_target.is_dir() and self.zip_threshold > 0:
+            local_files = self.get_local_files(target_rel_path) if self.mode in ("upload", "sync") else {}
+            if self.mode in ("upload", "sync") and len(local_files) > self.zip_threshold:
+                print(f"Auto-Zip Rule Triggered: '{full_target.name}' contains {len(local_files):,} files (> {self.zip_threshold} threshold).")
+                print(f"Zipping folder and uploading zipped version to Box.\n")
+                return self.sync_zipped_folder(full_target, target_rel_path)
+
+            if self.mode in ("download", "sync"):
+                zip_cand = f"{full_target.name}.zip"
+                try:
+                    box_items = {it.name: it for it in self.client.folder(self.box_root_id).get_items(limit=1000, fields=["id", "name", "size"])}
+                    if zip_cand in box_items and len(local_files) == 0:
+                        print(f"Found remote archive '{zip_cand}' on Box. Downloading and extracting...")
+                        return self.sync_zipped_folder(full_target, target_rel_path)
+                except Exception:
+                    pass
 
         local_files: Dict[str, int] = {}
         if self.mode in ("upload", "sync"):

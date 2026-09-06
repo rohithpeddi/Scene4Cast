@@ -188,8 +188,9 @@ def check_status(cfg: Optional[dict] = None, client=None):
     print(f"Item 6: Annotated Video Frames (frames_annotated)")
     print(f"  Box Target ID : {frames_folder_id}")
     print(f"  Local Path    : {frames_local} ({'EXISTS' if frames_local.exists() else 'MISSING'})")
-    in_box_root = "frames_annotated" in root_items
-    print(f"  Box Status    : {'PRESENT in WorldSGGDataset' if in_box_root else 'Not yet in WorldSGGDataset root'}")
+    in_box_frames = "frames_annotated" in root_items or "frames_annotated.zip" in root_items or "frames_annotated.tar.gz" in root_items
+    matching_f = [fn for fn in ["frames_annotated", "frames_annotated.zip", "frames_annotated.tar.gz"] if fn in root_items]
+    print(f"  Box Status    : {'PRESENT (' + ', '.join(matching_f) + ')' if in_box_frames else 'Not yet in WorldSGGDataset root'}")
 
     # 7. gt_annotations
     print("\n------------------------------------------------------------")
@@ -198,8 +199,9 @@ def check_status(cfg: Optional[dict] = None, client=None):
     print(f"Item 7: Ground Truth Annotations (gt_annotations)")
     print(f"  Box Target ID : {gt_folder_id}")
     print(f"  Local Target  : {gt_local} ({'EXISTS' if gt_local.exists() else 'MISSING'})")
-    in_box_gt = "gt_annotations" in root_items or "gt_annotations_map.pkl" in root_items
-    print(f"  Box Status    : {'PRESENT' if in_box_gt else 'MISSING in target root'}")
+    in_box_gt = "gt_annotations" in root_items or "gt_annotations_map.pkl" in root_items or "gt_annotations.zip" in root_items
+    matching_gt = [fn for fn in ["gt_annotations", "gt_annotations_map.pkl", "gt_annotations.zip"] if fn in root_items]
+    print(f"  Box Status    : {'PRESENT (' + ', '.join(matching_gt) + ')' if in_box_gt else 'MISSING in target root'}")
 
     # 8. active_objects
     print("\n------------------------------------------------------------")
@@ -208,8 +210,9 @@ def check_status(cfg: Optional[dict] = None, client=None):
     print(f"Item 8: Active Objects (active_objects)")
     print(f"  Box Target ID : {ao_folder_id}")
     print(f"  Local Path    : {ao_local} ({'EXISTS' if ao_local.exists() else 'MISSING'})")
-    in_box_ao = "active_objects" in root_items
-    print(f"  Box Status    : {'PRESENT in WorldSGGDataset' if in_box_ao else 'MISSING in target root'}")
+    in_box_ao = "active_objects" in root_items or "active_objects.zip" in root_items
+    matching_ao = [fn for fn in ["active_objects", "active_objects.zip"] if fn in root_items]
+    print(f"  Box Status    : {'PRESENT (' + ', '.join(matching_ao) + ')' if in_box_ao else 'MISSING in target root'}")
 
     # 9. segmentation
     print("\n------------------------------------------------------------")
@@ -249,7 +252,7 @@ def check_status(cfg: Optional[dict] = None, client=None):
 # Individual Dataset Sync Functions
 # ---------------------------------------------------------------------------
 
-def sync_item1(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item1(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 1: Main 2D & 3D Annotations Folder."""
     client = get_box_client(cfg)
     box_folder_id = box_sync_folder_id(cfg, "annotations", fallback=DEFAULT_AG_ANNOTATIONS_ID)
@@ -269,12 +272,13 @@ def sync_item1(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
         workers=workers,
         dry_run=dry_run,
         verbose=False,
+        zip_threshold=zip_threshold,
     )
     service.sync(target_rel_path="")
     print("[Item 1 / annotations] Finished successfully.")
 
 
-def sync_item2(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item2(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 2: WorldWise Training Annotations (world4d_rel_annotations.zip)."""
     client = get_box_client(cfg)
     root_folder_id = box_sync_folder_id(cfg, "root", fallback=DEFAULT_TARGET_ROOT_FOLDER_ID)
@@ -321,7 +325,7 @@ def sync_item2(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
     print("[Item 2 / world4d_rel_annotations] Finished.")
 
 
-def sync_item3(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item3(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 3: World 3D Annotations Folder (world_annotations)."""
     client = get_box_client(cfg)
     wa_folder_id = box_sync_folder_id(cfg, "world_annotations", fallback=DEFAULT_WORLD_ANNOTATIONS_ID)
@@ -341,12 +345,13 @@ def sync_item3(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
         workers=workers,
         dry_run=dry_run,
         verbose=False,
+        zip_threshold=zip_threshold,
     )
     service.sync(target_rel_path="")
     print("[Item 3 / world_annotations] Finished successfully.")
 
 
-def sync_item4(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item4(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 4: Scene4Cast 3D Bounding Box Data."""
     client = get_box_client(cfg)
     root_folder_id = box_sync_folder_id(cfg, "scene4cast_data", fallback=DEFAULT_TARGET_ROOT_FOLDER_ID)
@@ -392,7 +397,7 @@ def sync_item4(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
     print("[Item 4 / scene4cast_data] Finished.")
 
 
-def sync_item5(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item5(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 5: Final 3D OBB Bounding Boxes (bbox_annotations_3d_obb_final)."""
     client = get_box_client(cfg)
     box_folder_id = box_sync_folder_id(cfg, "bbox_annotations_3d_obb_final", fallback=DEFAULT_BBOX_OBB_FINAL_ID)
@@ -412,12 +417,13 @@ def sync_item5(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
         workers=workers,
         dry_run=dry_run,
         verbose=False,
+        zip_threshold=zip_threshold,
     )
     service.sync(target_rel_path="")
     print("[Item 5 / bbox_annotations_3d_obb_final] Finished successfully.")
 
 
-def sync_item6(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item6(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 6: Annotated Video Frames (frames_annotated)."""
     client = get_box_client(cfg)
     root_folder_id = box_sync_folder_id(cfg, "frames_annotated", fallback=DEFAULT_TARGET_ROOT_FOLDER_ID)
@@ -437,12 +443,13 @@ def sync_item6(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
         workers=workers,
         dry_run=dry_run,
         verbose=False,
+        zip_threshold=zip_threshold,
     )
     service.sync(target_rel_path=local_path.name)
     print("[Item 6 / frames_annotated] Finished successfully.")
 
 
-def sync_item7(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item7(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 7: Ground Truth Annotations (gt_annotations / gt_annotations_map.pkl)."""
     client = get_box_client(cfg)
     root_folder_id = box_sync_folder_id(cfg, "gt_annotations", fallback=DEFAULT_TARGET_ROOT_FOLDER_ID)
@@ -489,13 +496,14 @@ def sync_item7(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
             workers=workers,
             dry_run=dry_run,
             verbose=False,
+            zip_threshold=zip_threshold,
         )
         service.sync(target_rel_path=local_target.name)
 
     print("[Item 7 / gt_annotations] Finished.")
 
 
-def sync_item8(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item8(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 8: Active Objects (active_objects)."""
     client = get_box_client(cfg)
     root_folder_id = box_sync_folder_id(cfg, "active_objects", fallback=DEFAULT_TARGET_ROOT_FOLDER_ID)
@@ -515,12 +523,13 @@ def sync_item8(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
         workers=workers,
         dry_run=dry_run,
         verbose=False,
+        zip_threshold=zip_threshold,
     )
     service.sync(target_rel_path=local_path.name)
     print("[Item 8 / active_objects] Finished successfully.")
 
 
-def sync_item9(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item9(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 9: Segmentation Masks & Masked Videos (segmentation)."""
     client = get_box_client(cfg)
     box_folder_id = box_sync_folder_id(cfg, "segmentation", fallback=DEFAULT_SEGMENTATION_FOLDER_ID)
@@ -540,12 +549,13 @@ def sync_item9(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = 
         workers=workers,
         dry_run=dry_run,
         verbose=False,
+        zip_threshold=zip_threshold,
     )
     service.sync(target_rel_path="")
     print("[Item 9 / segmentation] Finished successfully.")
 
 
-def sync_item10(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item10(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 10: Video Splits JSON (video_splits.json)."""
     client = get_box_client(cfg)
     root_folder_id = box_sync_folder_id(cfg, "video_splits", fallback=DEFAULT_TARGET_ROOT_FOLDER_ID)
@@ -593,7 +603,7 @@ def sync_item10(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool =
     print("[Item 10 / video_splits] Finished.")
 
 
-def sync_item11(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_item11(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync Item 11: Dynamic Scenes (dynamic_scenes)."""
     client = get_box_client(cfg)
     box_folder_id = box_sync_folder_id(cfg, "dynamic_scenes", fallback=DEFAULT_DYNAMIC_SCENES_FOLDER_ID)
@@ -629,10 +639,12 @@ def sync_item11(cfg: dict, mode: str = "sync", workers: int = 1, dry_run: bool =
             workers=workers,
             dry_run=dry_run,
             verbose=False,
+            zip_threshold=zip_threshold,
         )
         service.sync(target_rel_path="")
 
     print("[Item 11 / dynamic_scenes] Finished.")
+
 
 
 SYNC_DISPATCH = {
@@ -661,11 +673,11 @@ SYNC_DISPATCH = {
 }
 
 
-def sync_by_folder_or_name(cfg: dict, target_name: str, mode: str = "sync", workers: int = 1, dry_run: bool = False):
+def sync_by_folder_or_name(cfg: dict, target_name: str, mode: str = "sync", workers: int = 1, dry_run: bool = False, zip_threshold: int = 30):
     """Sync a dataset component by its folder name, alias, or index."""
     norm = normalize_item_name(target_name)
     if norm in SYNC_DISPATCH:
-        SYNC_DISPATCH[norm](cfg, mode=mode, workers=workers, dry_run=dry_run)
+        SYNC_DISPATCH[norm](cfg, mode=mode, workers=workers, dry_run=dry_run, zip_threshold=zip_threshold)
         return
 
     # If arbitrary folder name: resolve local and box targets
@@ -682,12 +694,20 @@ def sync_by_folder_or_name(cfg: dict, target_name: str, mode: str = "sync", work
         if mode in ("upload", "sync"):
             service.upload_file(local_path.name, local_path.stat().st_size, root_folder_id, local_file_path=local_path)
     else:
-        service = BoxSyncService(client=client, local_root=local_path.parent, box_root_id=root_folder_id, workers=workers, dry_run=dry_run)
+        service = BoxSyncService(
+            client=client,
+            local_root=local_path.parent,
+            box_root_id=root_folder_id,
+            mode=mode,
+            workers=workers,
+            dry_run=dry_run,
+            zip_threshold=zip_threshold,
+        )
         service.sync(target_rel_path=local_path.name)
     print(f"[Custom Folder Sync: '{target_name}'] Finished.")
 
 
-def run_parallel_agents(cfg_path: Optional[str], mode: str = "sync", workers: int = 1, items: Optional[List[str]] = None):
+def run_parallel_agents(cfg_path: Optional[str], mode: str = "sync", workers: int = 1, items: Optional[List[str]] = None, zip_threshold: int = 30):
     """Spawn multiple agent background processes to sync selected datasets."""
     python_bin = sys.executable
     script_path = str(Path(__file__).resolve())
@@ -699,7 +719,13 @@ def run_parallel_agents(cfg_path: Optional[str], mode: str = "sync", workers: in
     for item in items:
         log_file = LOG_DIR / f"agent_item_{item}.log"
         f = open(log_file, "a", buffering=1)
-        cmd = [python_bin, "-u", script_path, "--item", str(item), "--mode", mode, "--workers", str(workers)]
+        cmd = [
+            python_bin, "-u", script_path,
+            "--item", str(item),
+            "--mode", mode,
+            "--workers", str(workers),
+            "--zip-threshold", str(zip_threshold),
+        ]
         if cfg_path:
             cmd.extend(["--config", cfg_path])
         proc = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, close_fds=True)
@@ -744,6 +770,12 @@ def main():
         help="Number of workers per sync process (default: 1)",
     )
     parser.add_argument(
+        "--zip-threshold",
+        type=int,
+        default=30,
+        help="If folder contains more than this number of files across all subfolders, zip it and transfer the archive (default: 30, 0 to disable)",
+    )
+    parser.add_argument(
         "--local-root",
         default=None,
         help="Override base local directory for datasets",
@@ -780,9 +812,10 @@ def main():
         return
 
     if args.item.lower() == "all":
-        run_parallel_agents(args.config, mode=args.mode, workers=args.workers)
+        run_parallel_agents(args.config, mode=args.mode, workers=args.workers, zip_threshold=args.zip_threshold)
     else:
-        sync_by_folder_or_name(cfg, args.item, mode=args.mode, workers=args.workers, dry_run=args.dry_run)
+        sync_by_folder_or_name(cfg, args.item, mode=args.mode, workers=args.workers, dry_run=args.dry_run, zip_threshold=args.zip_threshold)
+
 
 
 if __name__ == "__main__":
