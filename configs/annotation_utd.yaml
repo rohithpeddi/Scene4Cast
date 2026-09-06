@@ -44,6 +44,25 @@ box_sync:
     dynamic_scenes:
       folder_id: "415500109453"
       local_root: "/data2/rohith/ag/ag4D/dynamic_scenes"
+    bbox_annotations_3d_obb_final:
+      folder_id: "415505548311"
+      local_path: "world_annotations/bbox_annotations_3d_obb_final"
+    frames_annotated:
+      folder_id: "380446756239"
+      local_path: "frames_annotated"
+    gt_annotations:
+      folder_id: "380446756239"
+      local_path: "world_annotations/gt_annotations_map.pkl"
+    active_objects:
+      folder_id: "380446756239"
+      local_path: "active_objects"
+    segmentation:
+      folder_id: "390042982876"
+      local_path: "segmentation"
+    video_splits:
+      folder_id: "380446756239"
+      file_id: "2218233184203"
+      local_path: "video_splits.json"
 
 # --- Dataset Phase ---
 phase: "test"  # Options: "train" or "test"

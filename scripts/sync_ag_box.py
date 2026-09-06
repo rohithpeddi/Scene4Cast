@@ -42,6 +42,7 @@ from scripts.box_sync_common import (
     box_sync_local_root,
     get_box_client,
     load_config,
+    normalize_item_name,
 )
 
 
@@ -53,7 +54,7 @@ def parse_args():
         "--source",
         "-s",
         default="annotations",
-        help="Relative subfolder or file under local root to sync (default: annotations)",
+        help="Folder or file name to sync (e.g. active_objects, bbox_annotations_3d_obb_final, frames_annotated, video_splits.json, segmentation)",
     )
     parser.add_argument(
         "--mode",
@@ -70,7 +71,7 @@ def parse_args():
     parser.add_argument(
         "--folder-id",
         default=None,
-        help="Box destination folder ID (default: 380446756239)",
+        help="Box destination folder ID (default: auto-resolved based on folder name)",
     )
     parser.add_argument(
         "--local-root",
@@ -80,8 +81,8 @@ def parse_args():
     parser.add_argument(
         "--workers",
         type=int,
-        default=8,
-        help="Number of concurrent transfer workers (default: 8)",
+        default=1,
+        help="Number of concurrent transfer workers (default: 1)",
     )
     parser.add_argument(
         "--dry-run",
@@ -110,14 +111,31 @@ def parse_args():
 def main():
     args = parse_args()
     cfg = load_config(args.config)
-    box_folder_id = box_sync_folder_id(cfg, "annotations", args.folder_id, fallback="380446756239")
-    local_root = box_sync_local_root(cfg, "annotations", args.local_root, fallback="/data/rohith/ag")
 
     target_source = args.source
     mode = args.mode
     if args.download_annotations:
         target_source = "annotations"
         mode = "download"
+
+    norm_purpose = normalize_item_name(target_source)
+    root_folder_id = (cfg.get("box_sync", {}) or {}).get("root_folder_id", "380446756239")
+    box_folder_id = box_sync_folder_id(cfg, norm_purpose, args.folder_id, fallback=root_folder_id)
+    resolved_path = box_sync_local_root(cfg, norm_purpose, args.local_root, fallback="/data/rohith/ag")
+
+    if resolved_path.exists():
+        if resolved_path.is_file():
+            local_root = resolved_path.parent
+            rel_sync = resolved_path.name
+        elif box_folder_id != root_folder_id:
+            local_root = resolved_path
+            rel_sync = ""
+        else:
+            local_root = resolved_path.parent
+            rel_sync = resolved_path.name
+    else:
+        local_root = box_sync_local_root(cfg, "", args.local_root, fallback="/data/rohith/ag")
+        rel_sync = target_source
 
     client = get_box_client(cfg, args.box_cred)
     service = BoxSyncService(
@@ -130,7 +148,7 @@ def main():
         verbose=args.verbose,
     )
 
-    service.sync(target_rel_path=target_source)
+    service.sync(target_rel_path=rel_sync)
 
 
 if __name__ == "__main__":

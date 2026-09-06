@@ -71,14 +71,96 @@ _CRED_CANDIDATES = [
 # Default fallbacks for Scene4Cast Box sync
 DEFAULT_BOX_SYNC = {
     "annotations": {
-        "folder_id": "380446756239",
+        "folder_id": "367501057528",
         "local_root": "/data/rohith/ag",
+        "local_path": "annotations",
+    },
+    "world4d_rel_annotations": {
+        "folder_id": "380446756239",
+        "file_id": "2449163179187",
+        "local_path": "world4d_rel_annotations.zip",
+    },
+    "world_annotations": {
+        "folder_id": "415504806441",
+        "local_path": "world_annotations",
+    },
+    "scene4cast_data": {
+        "folder_id": "380446756239",
+        "local_path": "world_annotations",
+        "files": {
+            "bbox_annotations_3d_final.zip": "2449163646313",
+            "bbox_annotations_3d_obb_camera.zip": "2449160296239",
+        },
     },
     "dynamic_scenes": {
-        "folder_id": "380446756239",
+        "folder_id": "415500109453",
         "local_root": "/data2/rohith/ag/ag4D/dynamic_scenes",
+        "local_path": "ag4D/dynamic_scenes",
+    },
+    "bbox_annotations_3d_obb_final": {
+        "folder_id": "415505548311",
+        "local_path": "world_annotations/bbox_annotations_3d_obb_final",
+    },
+    "frames_annotated": {
+        "folder_id": "380446756239",
+        "local_path": "frames_annotated",
+    },
+    "gt_annotations": {
+        "folder_id": "380446756239",
+        "local_path": "world_annotations/gt_annotations_map.pkl",
+    },
+    "active_objects": {
+        "folder_id": "380446756239",
+        "local_path": "active_objects",
+    },
+    "segmentation": {
+        "folder_id": "390042982876",
+        "local_path": "segmentation",
+    },
+    "video_splits": {
+        "folder_id": "380446756239",
+        "file_id": "2218233184203",
+        "local_path": "video_splits.json",
     },
 }
+
+ITEM_ALIASES = {
+    "1": "annotations",
+    "ag_annotations": "annotations",
+    "2": "world4d_rel_annotations",
+    "3": "world_annotations",
+    "4": "scene4cast_data",
+    "5": "bbox_annotations_3d_obb_final",
+    "bbox_obb": "bbox_annotations_3d_obb_final",
+    "bbox_annotations_3d_obb_final": "bbox_annotations_3d_obb_final",
+    "6": "frames_annotated",
+    "frames_annotated": "frames_annotated",
+    "7": "gt_annotations",
+    "gt_annotations": "gt_annotations",
+    "8": "active_objects",
+    "active_objects": "active_objects",
+    "9": "segmentation",
+    "segmentation": "segmentation",
+    "10": "video_splits",
+    "video_splits": "video_splits",
+    "video_splits.json": "video_splits",
+    "11": "dynamic_scenes",
+    "dynamic_scenes": "dynamic_scenes",
+}
+
+
+def normalize_item_name(name: str) -> str:
+    """Normalize item or folder name aliases."""
+    if not name:
+        return ""
+    clean = name.strip().rstrip("/")
+    if clean in ITEM_ALIASES:
+        return ITEM_ALIASES[clean]
+    # Check without trailing .json or path prefixes
+    base = Path(clean).name
+    if base in ITEM_ALIASES:
+        return ITEM_ALIASES[base]
+    return clean
 
 # Action Genome Shards
 STANDARD_SPLITS = {
@@ -216,13 +298,21 @@ def get_box_client(cfg: Optional[dict] = None, cli_cred: Optional[str] = None) -
 
 
 def _entry(cfg: dict, purpose: str) -> dict:
-    """Retrieve config entry for a purpose, checking both box_sync.datasets.<purpose> and box_sync.<purpose>."""
+    """Retrieve config entry for a purpose, checking datasets, box_sync, and defaults."""
+    norm_purpose = normalize_item_name(purpose)
     bs = cfg.get("box_sync", {}) or {}
     datasets = bs.get("datasets", {}) or {}
-    if purpose in datasets and isinstance(datasets[purpose], dict):
-        return datasets[purpose]
-    if purpose in bs and isinstance(bs[purpose], dict):
-        return bs[purpose]
+
+    for key in (norm_purpose, purpose):
+        if key in datasets and isinstance(datasets[key], dict):
+            return datasets[key]
+        if key in bs and isinstance(bs[key], dict):
+            return bs[key]
+
+    if norm_purpose in DEFAULT_BOX_SYNC:
+        return DEFAULT_BOX_SYNC[norm_purpose]
+    if purpose in DEFAULT_BOX_SYNC:
+        return DEFAULT_BOX_SYNC[purpose]
     return {}
 
 
@@ -232,7 +322,7 @@ def box_sync_folder_id(
     cli: Optional[str] = None,
     fallback: Optional[str] = None,
 ) -> str:
-    """Resolve Box folder ID: cli > config (dataset or purpose) > fallback > '380446756239'."""
+    """Resolve Box folder ID: cli > config (dataset or purpose) > default mapping > fallback > '380446756239'."""
     if cli:
         return str(cli)
     entry = _entry(cfg, purpose)
@@ -254,9 +344,9 @@ def box_sync_local_root(
     fallback: Optional[str] = None,
     key: str = "local_root",
 ) -> Path:
-    """Resolve local directory path: cli > purpose entry path > box_sync.local_root > ag_root_directory > fallback.
+    """Resolve local directory or file path based on folder name or dataset purpose.
 
-    If a purpose entry specifies 'local_path', it is joined with base_root unless already absolute.
+    Checks: cli > purpose entry path > folder existence under base_root > box_sync.local_root > ag_root_directory > fallback.
     """
     if cli:
         return Path(cli).resolve()
@@ -267,26 +357,66 @@ def box_sync_local_root(
     if not purpose:
         return base_root
 
+    norm_purpose = normalize_item_name(purpose)
     entry = _entry(cfg, purpose)
-    # Check explicit full path first
+
+    # 1. Check explicit full path or relative local_path from config/default
     val = entry.get(key)
     res = None
     if val:
         p = Path(val)
         res = p if p.is_absolute() else (base_root / p).resolve()
     else:
-        # Check relative local_path
         rel_path = entry.get("local_path")
         if rel_path:
             p = Path(rel_path)
             res = p if p.is_absolute() else (base_root / p).resolve()
 
+    # 2. Smart fallbacks for specific known datasets if config path doesn't exist
+    if norm_purpose == "gt_annotations":
+        if res and res.exists():
+            return res
+        for cand in [
+            base_root / "gt_annotations",
+            base_root / "ag4D" / "gt_annotations",
+            base_root / "world_annotations" / "gt_annotations_map.pkl",
+        ]:
+            if cand.exists():
+                return cand.resolve()
+
+    if norm_purpose == "video_splits":
+        if res and res.exists():
+            return res
+        for cand in [base_root / "video_splits.json", Path("/data/rohith/ag/video_splits.json")]:
+            if cand.exists():
+                return cand.resolve()
+
+    if norm_purpose == "bbox_annotations_3d_obb_final":
+        if res and res.exists():
+            return res
+        for cand in [
+            base_root / "world_annotations" / "bbox_annotations_3d_obb_final",
+            base_root / "bbox_annotations_3d_obb_final",
+        ]:
+            if cand.is_dir():
+                return cand.resolve()
+
+    if norm_purpose == "dynamic_scenes" and fallback:
+        fb = Path(fallback).resolve()
+        if fb.exists() and (fb / "pi3_dynamic").is_dir():
+            if not res or not res.exists() or not (res / "pi3_dynamic").is_dir():
+                return fb
+
+    if res and res.exists():
+        return res
+
+    # 3. Direct folder lookup by name under base_root (e.g. active_objects, frames_annotated, segmentation)
+    for name_cand in [purpose, norm_purpose]:
+        cand_path = (base_root / name_cand).resolve()
+        if cand_path.exists():
+            return cand_path
+
     if res:
-        if purpose == "dynamic_scenes" and fallback:
-            fb = Path(fallback).resolve()
-            if fb.exists() and (fb / "pi3_dynamic").is_dir():
-                if not res.exists() or not (res / "pi3_dynamic").is_dir():
-                    return fb
         return res
 
     if fallback:

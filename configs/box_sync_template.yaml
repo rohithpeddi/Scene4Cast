@@ -62,3 +62,34 @@ box_sync:
     dynamic_scenes:
       folder_id: "415500109453"
       local_path: "ag4D/dynamic_scenes"
+
+    # 6. Final 3D OBB Bounding Boxes
+    bbox_annotations_3d_obb_final:
+      folder_id: "415505548311"
+      local_path: "world_annotations/bbox_annotations_3d_obb_final"
+
+    # 7. Annotated Video Frames
+    frames_annotated:
+      folder_id: "380446756239"
+      local_path: "frames_annotated"
+
+    # 8. Ground Truth Annotations
+    gt_annotations:
+      folder_id: "380446756239"
+      local_path: "world_annotations/gt_annotations_map.pkl"
+
+    # 9. Active Objects
+    active_objects:
+      folder_id: "380446756239"
+      local_path: "active_objects"
+
+    # 10. Segmentation Masks & Masked Videos
+    segmentation:
+      folder_id: "390042982876"
+      local_path: "segmentation"
+
+    # 11. Video Splits JSON (train & test video IDs)
+    video_splits:
+      folder_id: "380446756239"
+      file_id: "2218233184203"
+      local_path: "video_splits.json"
