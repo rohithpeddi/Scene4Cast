@@ -43,7 +43,7 @@ box_sync:
         bbox_annotations_3d_obb_camera.zip: "2449160296239"
     dynamic_scenes:
       folder_id: "415500109453"
-      local_path: "ag4D/dynamic_scenes"
+      local_root: "/data2/rohith/ag/ag4D/dynamic_scenes"
 
 # --- Dataset Phase ---
 phase: "test"  # Options: "train" or "test"

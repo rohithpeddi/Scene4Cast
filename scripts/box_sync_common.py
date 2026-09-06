@@ -270,15 +270,24 @@ def box_sync_local_root(
     entry = _entry(cfg, purpose)
     # Check explicit full path first
     val = entry.get(key)
+    res = None
     if val:
         p = Path(val)
-        return p if p.is_absolute() else (base_root / p).resolve()
+        res = p if p.is_absolute() else (base_root / p).resolve()
+    else:
+        # Check relative local_path
+        rel_path = entry.get("local_path")
+        if rel_path:
+            p = Path(rel_path)
+            res = p if p.is_absolute() else (base_root / p).resolve()
 
-    # Check relative local_path
-    rel_path = entry.get("local_path")
-    if rel_path:
-        p = Path(rel_path)
-        return p if p.is_absolute() else (base_root / p).resolve()
+    if res:
+        if purpose == "dynamic_scenes" and fallback:
+            fb = Path(fallback).resolve()
+            if fb.exists() and (fb / "pi3_dynamic").is_dir():
+                if not res.exists() or not (res / "pi3_dynamic").is_dir():
+                    return fb
+        return res
 
     if fallback:
         return Path(fallback).resolve()
@@ -444,19 +453,26 @@ class BoxSyncService:
         if folder_id in self._folder_cache:
             return self._folder_cache[folder_id]
 
+        if not hasattr(self, "_folder_sizes_cache"):
+            self._folder_sizes_cache: Dict[str, Dict[str, int]] = {}
+
         children: Dict[str, str] = {}
+        sizes: Dict[str, int] = {}
         try:
             items = self._with_retries(
-                lambda: list(self.client.folder(folder_id).get_items(fields=["id", "name", "type"]))
+                lambda: list(self.client.folder(folder_id).get_items(limit=1000, fields=["id", "name", "type", "size"]))
             )
             for it in items:
                 if it.type == "folder":
                     children[it.name] = it.id
+                    if getattr(it, "size", None) is not None:
+                        sizes[it.name] = it.size
         except Exception as e:
             if self.verbose:
                 print(f"Warning: Could not list folder {folder_id}: {e}")
 
         self._folder_cache[folder_id] = children
+        self._folder_sizes_cache[folder_id] = sizes
         return children
 
     def find_box_path(self, root_id: str, rel_dir: str) -> Optional[str]:
@@ -736,7 +752,21 @@ class BoxSyncService:
         if target_subdirs:
             for sdir in target_subdirs:
                 s_id = self.find_box_path(box_root, sdir)
-                if s_id:
+                if not s_id:
+                    continue
+                children = self._get_folder_children(s_id)
+                relevant_entries = [e for e in file_entries if Path(e[1]).parts[0] == sdir]
+                is_two_level = all(len(Path(e[1]).parts) == 3 for e in relevant_entries)
+                if is_two_level and len(children) > 20:
+                    candidate_subdirs = {Path(e[1]).parts[1] for e in relevant_entries}
+                    matching_subdirs = candidate_subdirs.intersection(children.keys())
+                    folder_sizes = getattr(self, "_folder_sizes_cache", {}).get(s_id, {})
+                    for e in relevant_entries:
+                        m_sub = Path(e[1]).parts[1]
+                        if m_sub in matching_subdirs:
+                            sz = folder_sizes.get(m_sub, e[2])
+                            box_existing[e[1]] = sz
+                else:
                     sub_files = self.get_box_files(s_id, current_rel_prefix=sdir)
                     for k, (sz, _) in sub_files.items():
                         box_existing[k] = sz

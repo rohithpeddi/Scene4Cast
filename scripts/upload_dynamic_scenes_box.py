@@ -143,11 +143,16 @@ def main():
         print(f"Error: Directory does not exist: {search_base}", file=sys.stderr)
         sys.exit(1)
 
+    target_subdir = args.target_subdir
+    # If destination folder is already 'dynamic_scenes' (ID 415500109453), avoid double-nesting
+    if box_folder_id == "415500109453" and target_subdir == "dynamic_scenes":
+        target_subdir = ""
+
     print(f"\n==================================================================")
     print(f" Dynamic Scenes Uploader -> Box Folder [{box_folder_id}]")
     print(f" Local Root   : {local_root}")
     print(f" Search Base  : {search_base}")
-    print(f" Target Subdir: {args.target_subdir}")
+    print(f" Target Subdir: {target_subdir or '(root of folder)'}")
     print(f" Mode Filter  : {args.mode.upper()}")
     print(f" Split Filter : {', '.join(sorted(splits)) if splits else 'ALL'}")
     print(f" Workers      : {args.workers}")
@@ -182,8 +187,8 @@ def main():
         for f in d.iterdir():
             if f.is_file():
                 rel = f.relative_to(local_root).as_posix()
-                if args.target_subdir:
-                    rel = f"{args.target_subdir}/{rel}"
+                if target_subdir:
+                    rel = f"{target_subdir}/{rel}"
                 file_entries.append((f, rel, f.stat().st_size))
 
     print("\n------------------------- SUMMARY -------------------------")
@@ -208,15 +213,15 @@ def main():
         service.upload_file_map(file_entries, target_box_root_id=box_folder_id)
 
     if args.sync_mode in ("download", "sync"):
-        target_sub_id = service.find_box_path(box_folder_id, args.target_subdir) if args.target_subdir else box_folder_id
+        target_sub_id = service.find_box_path(box_folder_id, target_subdir) if target_subdir else box_folder_id
         if target_sub_id:
-            print(f"\nScanning remote Box folder for download: {args.target_subdir or box_folder_id}...")
-            box_files = service.get_box_files(target_sub_id, current_rel_prefix=args.target_subdir or "")
+            print(f"\nScanning remote Box folder for download: {target_subdir or box_folder_id}...")
+            box_files = service.get_box_files(target_sub_id, current_rel_prefix=target_subdir or "")
             to_download = []
             for rel, (size, fid) in box_files.items():
                 parts = Path(rel).parts
                 # Check video ID from path
-                vid = parts[1] if len(parts) > 1 and parts[0] == args.target_subdir else parts[0]
+                vid = parts[1] if len(parts) > 1 and parts[0] == target_subdir else parts[0]
                 v_mode = resolver.get_mode(vid)
                 if args.mode != "both" and v_mode != args.mode:
                     continue
